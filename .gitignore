@@ -1,0 +1,31 @@
+# --- Secrets (le plus important) ---
+.env
+.env.*
+!.env.example
+# La clé API et tout secret va dans .env (ignoré).
+# .env.example sera committé un jour comme template public (sans valeurs).
+
+# --- Environnement virtuel ---
+.venv/
+venv/
+# Lourd (~50 Mo), reproductible depuis requirements.txt — inutile en repo.
+
+# --- Cache Python ---
+__pycache__/
+*.pyc
+*.pyo
+# Bytecode regénéré à chaque run.
+
+# --- IDE ---
+.vscode/
+.idea/
+# Préférences locales, ne concernent que ta machine.
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Logs et artefacts de test ---
+*.log
+report.json
+# Préemptif : la Brique 5 générera des rapports, on ne veut pas les committer.
