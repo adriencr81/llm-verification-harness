@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /home/user/llm-verification-harness && python verify_hook.py",
+            "asyncRewake": true,
+            "rewakeMessage": "Feedback du juge externe : ",
+            "rewakeSummary": "Loop Engineering — vérification en cours",
+            "timeout": 30,
+            "statusMessage": "Verification loop..."
+          }
+        ]
+      }
+    ]
+  }
+}
