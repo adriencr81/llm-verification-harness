@@ -1,8 +1,13 @@
-"""Brique 0.5 — boucle de vérification de réponse LLM (LLM-as-judge).
+"""Loop Engineering — l'agent drive chaque étape, l'humain pose le goal et revoit le résultat.
 
-Génère une réponse, la soumet à un juge LLM, et recommence si les critères
-ne sont pas satisfaits. Fournit une trace d'audit complète (anticipe le VCD
-de Brique 7 et la hardening loop de Brique 9).
+Architecture (cf. diagramme Loop Engineering) :
+  1. Human sets goal   →  loop.run(goal, success_criteria)
+  2. Trigger fires     →  la boucle démarre automatiquement
+  3. Agent acts        →  _act()       : le LLM génère une réponse
+  4. Goal met?         →  _goal_met()  : un juge LLM évalue
+     ├── NO  → feedback injecté, retour en 3
+     └── YES → on sort de la boucle
+  5. Human reviews output  →  LoopResult retourné à l'appelant
 """
 
 from __future__ import annotations
@@ -18,61 +23,72 @@ from openai import OpenAI
 load_dotenv()
 
 
+# ---------------------------------------------------------------------------
+# Résultats
+# ---------------------------------------------------------------------------
+
 @dataclass
-class VerificationResult:
-    passed: bool
+class GoalAssessment:
+    """Verdict du juge sur une tentative (étape 4 du diagramme)."""
+    met: bool
     score: int      # 0–10
-    reason: str
+    feedback: str   # pourquoi le goal n'est pas encore atteint
     tokens_used: int
 
 
 @dataclass
 class LoopResult:
-    response: str
-    final_verdict: VerificationResult
+    """Ce que l'humain reçoit pour review (étape 5 du diagramme)."""
+    output: str
+    goal_met: bool
     attempts: int
     history: list[dict] = field(default_factory=list)
 
-    @property
-    def passed(self) -> bool:
-        return self.final_verdict.passed
 
+# ---------------------------------------------------------------------------
+# Prompts du juge
+# ---------------------------------------------------------------------------
 
-_VERIFIER_SYSTEM = """\
-Tu es un juge d'évaluation de réponses LLM. Tu reçois une question, une réponse
-candidate et des critères d'acceptation. Tu retournes UNIQUEMENT un objet JSON
-valide avec les champs :
-  "passed" (bool), "score" (int 0-10), "reason" (str, 1 phrase max).
+_JUDGE_SYSTEM = """\
+Tu es un juge autonome. Tu reçois un goal, une réponse candidate et des critères
+de succès. Tu retournes UNIQUEMENT un JSON valide :
+  {"met": bool, "score": int (0-10), "feedback": "str (1 phrase)"}
 Aucun texte hors du JSON."""
 
-_VERIFIER_TEMPLATE = """\
-Question : {question}
+_JUDGE_TEMPLATE = """\
+Goal : {goal}
 
 Réponse candidate :
-{response}
+{output}
 
-Critères d'acceptation :
-{criteria}"""
+Critères de succès :
+{success_criteria}"""
 
 
-class ResponseVerificationLoop:
-    """Boucle generate → verify → retry avec juge LLM."""
+# ---------------------------------------------------------------------------
+# Loop Engineering
+# ---------------------------------------------------------------------------
+
+class GoalDrivenLoop:
+    """Boucle agent-driven : l'agent agit jusqu'à ce que le goal soit atteint."""
 
     def __init__(
         self,
         client: OpenAI,
         model: str = "anthropic/claude-sonnet-4.6",
-        verifier_model: Optional[str] = None,
-        max_retries: int = 3,
+        judge_model: Optional[str] = None,
+        max_attempts: int = 4,
         pass_threshold: int = 7,
     ):
         self.client = client
         self.model = model
-        self.verifier_model = verifier_model or model
-        self.max_retries = max_retries
+        self.judge_model = judge_model or model
+        self.max_attempts = max_attempts
         self.pass_threshold = pass_threshold
 
-    def _generate(self, messages: list[dict]) -> tuple[str, int]:
+    # -- Étape 3 : Agent acts ------------------------------------------------
+
+    def _act(self, messages: list[dict]) -> tuple[str, int]:
         resp = self.client.chat.completions.create(
             model=self.model,
             max_tokens=1024,
@@ -80,15 +96,17 @@ class ResponseVerificationLoop:
         )
         return resp.choices[0].message.content, resp.usage.total_tokens
 
-    def _verify(self, question: str, response: str, criteria: str) -> VerificationResult:
-        prompt = _VERIFIER_TEMPLATE.format(
-            question=question, response=response, criteria=criteria
+    # -- Étape 4 : Goal met? -------------------------------------------------
+
+    def _goal_met(self, goal: str, output: str, success_criteria: str) -> GoalAssessment:
+        prompt = _JUDGE_TEMPLATE.format(
+            goal=goal, output=output, success_criteria=success_criteria
         )
         resp = self.client.chat.completions.create(
-            model=self.verifier_model,
+            model=self.judge_model,
             max_tokens=256,
             messages=[
-                {"role": "system", "content": _VERIFIER_SYSTEM},
+                {"role": "system", "content": _JUDGE_SYSTEM},
                 {"role": "user", "content": prompt},
             ],
         )
@@ -96,68 +114,83 @@ class ResponseVerificationLoop:
         try:
             data = json.loads(raw)
             score = int(data.get("score", 0))
-            passed = bool(data.get("passed", False)) and score >= self.pass_threshold
-            return VerificationResult(
-                passed=passed,
+            met = bool(data.get("met", False)) and score >= self.pass_threshold
+            return GoalAssessment(
+                met=met,
                 score=score,
-                reason=str(data.get("reason", "")),
+                feedback=str(data.get("feedback", "")),
                 tokens_used=resp.usage.total_tokens,
             )
         except (json.JSONDecodeError, KeyError, ValueError):
-            return VerificationResult(
-                passed=False,
+            return GoalAssessment(
+                met=False,
                 score=0,
-                reason=f"Verifier output non parseable : {raw[:120]}",
+                feedback=f"Juge non parseable : {raw[:120]}",
                 tokens_used=resp.usage.total_tokens,
             )
 
-    def run(self, question: str, criteria: str) -> LoopResult:
-        """Boucle principale : jusqu'à max_retries tentatives generate → verify."""
-        messages: list[dict] = [{"role": "user", "content": question}]
-        history: list[dict] = []
-        verdict: Optional[VerificationResult] = None
-        response = ""
+    # -- Trigger + boucle principale -----------------------------------------
 
-        for attempt in range(1, self.max_retries + 1):
-            response, gen_tokens = self._generate(messages)
-            verdict = self._verify(question, response, criteria)
+    def run(self, goal: str, success_criteria: str) -> LoopResult:
+        """
+        Étapes 2-4 du diagramme — trigger + boucle autonome.
+        L'appelant pose le goal (étape 1) et reçoit LoopResult (étape 5).
+        """
+        # Étape 2 : Trigger fires — on initialise le contexte conversationnel
+        messages: list[dict] = [{"role": "user", "content": goal}]
+        history: list[dict] = []
+        assessment: Optional[GoalAssessment] = None
+        output = ""
+
+        for attempt in range(1, self.max_attempts + 1):
+
+            # Étape 3 : Agent acts
+            output, gen_tokens = self._act(messages)
+
+            # Étape 4 : Goal met?
+            assessment = self._goal_met(goal, output, success_criteria)
 
             history.append({
                 "attempt": attempt,
-                "response": response,
-                "verdict": verdict,
+                "output": output,
+                "assessment": assessment,
                 "gen_tokens": gen_tokens,
             })
 
+            status = "GOAL MET" if assessment.met else "loop..."
             print(
-                f"[Tentative {attempt}/{self.max_retries}] "
-                f"score={verdict.score}/10  passed={verdict.passed}"
-                f"  — {verdict.reason}"
+                f"[{attempt}/{self.max_attempts}] score={assessment.score}/10 "
+                f"{status} — {assessment.feedback}"
             )
 
-            if verdict.passed:
+            if assessment.met:
                 break
 
-            # Injecte le retour du juge pour guider la tentative suivante
-            if attempt < self.max_retries:
+            # NO → on injecte le feedback et on reboucle en étape 3
+            if attempt < self.max_attempts:
                 messages += [
-                    {"role": "assistant", "content": response},
+                    {"role": "assistant", "content": output},
                     {
                         "role": "user",
                         "content": (
-                            f"Ta réponse précédente n'est pas satisfaisante : "
-                            f"{verdict.reason}. Reprends et améliore-la."
+                            f"Pas encore. Feedback : {assessment.feedback} "
+                            f"Reprends et améliore."
                         ),
                     },
                 ]
 
+        # Étape 5 : Human reviews output
         return LoopResult(
-            response=response,
-            final_verdict=verdict,
+            output=output,
+            goal_met=assessment.met if assessment else False,
             attempts=len(history),
             history=history,
         )
 
+
+# ---------------------------------------------------------------------------
+# Démo
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     client = OpenAI(
@@ -165,19 +198,19 @@ if __name__ == "__main__":
         api_key=os.getenv("OPENROUTER_API_KEY"),
     )
 
-    loop = ResponseVerificationLoop(client, max_retries=3, pass_threshold=7)
+    loop = GoalDrivenLoop(client, max_attempts=4, pass_threshold=7)
 
+    # Étape 1 : Human sets goal
     result = loop.run(
-        question="Explique le principe de triple redondance dans les systèmes embarqués critiques.",
-        criteria=(
+        goal="Explique le principe de triple redondance dans les systèmes embarqués critiques.",
+        success_criteria=(
             "La réponse doit : (1) définir le principe en 1-2 phrases, "
-            "(2) mentionner au moins un exemple concret d'application, "
+            "(2) citer au moins un exemple concret (aviation, spatial ou nucléaire), "
             "(3) rester sous 150 mots."
         ),
     )
 
-    print("\n=== RÉSULTAT FINAL ===")
-    print(f"Statut : {'ACCEPTÉ' if result.passed else 'REFUSÉ'} "
-          f"après {result.attempts} tentative(s)")
-    print(f"Score final : {result.final_verdict.score}/10")
-    print(f"\n{result.response}")
+    # Étape 5 : Human reviews output
+    print("\n=== HUMAN REVIEWS OUTPUT ===")
+    print(f"Goal atteint : {result.goal_met} ({result.attempts} tentative(s))")
+    print(f"\n{result.output}")
