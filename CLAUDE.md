@@ -124,3 +124,49 @@ Reçoit la trajectoire complète des deux agents (chaque tool call + résultat) 
 
 Chaque brique livrée doit pouvoir répondre à la question :
 > "En quoi ce composant démontre-t-il une compétence explicitement citée dans l'annonce Mistral ?"
+
+---
+
+# Profil candidat — Adrien Deleuil
+
+Ingénieur IVVQ cyber spatial. Toulouse.
+
+| Expérience | Signal |
+|---|---|
+| Airbus Defence & Space — IVVQ cyber Onesat (2024–) | Environnement régulé haute criticité |
+| Bertrandt — IVV Egnos V3 | Systèmes critiques spatial |
+| Isika — Concepteur-développeur fullstack DevOps | Stack technique |
+| 7 ans gérant SARL Cabot | Autonomie, client, gestion, croissance |
+| Darty / IXINA / Next Idea | Communication, relation client |
+| ISTQB, Agile Tester, LPIC-1, Google Cybersecurity | Certifications |
+
+**Atout différenciateur** : le parcours pré-tech (7 ans dirigeant + socle commercial/rédactionnel) n'est pas du vide — c'est la capacité à traduire un risque technique en décision pour un non-technicien, et à opérer en autonomie client. Rare chez un ingénieur IVVQ.
+
+**Gap principal** : pas encore d'AI engineering commercial (agents, RAG en production). Ce projet est la preuve d'exécution qui compense.
+
+---
+
+# Stratégie de candidature
+
+## Principe
+
+Ne pas attendre d'être "prêt". Lancer deux axes en parallèle dès que les Briques 1-3 sont livrées.
+
+## Axe 1 — Candidature Mistral directe
+
+Postuler avec le projet comme preuve d'exécution. Présenter chaque brique comme un choix d'ingénierie motivé par les signaux de l'annonce, pas comme un side project.
+
+Angle de pitch : *"ingénieur vérification de systèmes critiques qui transpose sa méthode aux systèmes IA"*.
+
+## Axe 2 — Étape intermédiaire en parallèle
+
+Cibler 2-3 boîtes où le profil actuel entre directement ET où on touche de l'IA concrète :
+- Éditeurs cyber intégrant de l'IA (détection d'anomalies, scoring de menaces)
+- Défense/aérospatial buildant de l'IA (Thales, CS Group, Sopra Steria Defence)
+- Cabinets de conseil AI sur missions cyber
+
+Objectif : "AI engineer en production" sur le CV en 12-18 mois, puis candidature Mistral sans ambiguïté.
+
+## Déclencheur
+
+Lancer les candidatures dès que **Brique 3 (RAG complet)** est livrée — c'est le seuil minimal pour que le projet soit défendable en entretien technique.
