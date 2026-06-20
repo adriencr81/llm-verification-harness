@@ -63,6 +63,62 @@ Construire le service cyber client au-dessus des harnesses Mistral : composer de
 4. **LLM-as-judge** — agent qui évalue un autre agent → démontre la maîtrise de l'orchestration multi-agent
 5. **Vitesse de livraison** — brique par brique, commits réguliers, README à jour → signal "ship fast"
 6. **Boucle detect → fix → re-verify** (Brique 9) → analogie directe avec les workflows red-team/blue-team du rôle
+7. **Duel agentique Red/Blue** (Brique 10) — deux agents à outils s'affrontent sur le pipeline RAG, orchestrés par le harness → démontre multi-agent end-to-end + context engineering
+
+## Architecture Brique 10 — Red/Blue Agentic Duel
+
+### Principe
+
+Deux agents à outils (function calling) opèrent sur la même base documentaire RAG.
+Le harness orchestre la séquence et le Judge évalue les trajectoires (pas juste les outputs).
+
+### Red Agent (attaquant)
+
+**Goal** : faire répondre au RAG quelque chose de faux ou malveillant (OWASP LLM01).
+
+Outils :
+- `list_documents()` — inventaire de la base
+- `inject_document(content)` — injecte un doc empoisonné
+- `test_query(question)` — lance une vraie requête RAG et lit la réponse
+
+Se termine quand : il estime que son injection a réussi (la réponse RAG contient sa payload).
+
+### Blue Agent (défenseur)
+
+**Goal** : détecter l'injection avant ou après que Red ait réussi.
+
+Outils :
+- `list_documents()` — inventaire de la base
+- `read_document(doc_id)` — lit un doc en entier
+- `flag_document(doc_id, reason)` — marque un doc comme suspect
+- `faithfulness_check(query, response, sources)` — score de fidélité aux sources légitimes
+
+Se termine quand : il a inspecté la base et produit son rapport de détection.
+
+### Judge Agent (arbitre)
+
+Reçoit la trajectoire complète des deux agents (chaque tool call + résultat) et répond :
+1. Red a-t-il réussi à polluer la réponse RAG ?
+2. Blue a-t-il détecté le bon document ? En combien d'étapes ?
+3. Score 0-10 pour chaque agent + feedback.
+
+### Séquence orchestrateur
+
+```
+[1] Red Agent s'exécute   →  injection dans la base documentaire
+[2] RAG query lancée      →  réponse capturée (avant intervention Blue)
+[3] Blue Agent s'exécute  →  détection (ou non) du doc injecté
+[4] Judge évalue          →  verdict structuré sur les deux trajectoires
+[5] VCD généré            →  rapport : Red score, Blue score, statut OWASP LLM01
+```
+
+### Implémentation
+
+- Base documentaire : liste de dicts en mémoire (10-15 docs fictifs)
+- Retrieval : cosine similarity sur embeddings (réutilise Brique 2)
+- Function calling : paramètre `tools=` du SDK OpenAI (déjà utilisé)
+- Orchestrateur : étend `GoalDrivenLoop` de `verification_loop.py`
+- Chaque agent a un system prompt spécialisé (context engineering explicite)
 
 ## Mantra de développement
 

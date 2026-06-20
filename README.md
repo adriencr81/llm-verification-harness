@@ -31,6 +31,7 @@ Built incrementally, one brique per week:
 - [ ] Brique 7 — Auto-generated Verification Control Document
 - [ ] Brique 8 — Catalog (OWASP/ATLAS), unit tests, CI, polished README
 - [ ] Brique 9 — Hardening loop (detect → fix → re-verify on injection)
+- [ ] Brique 10 — Red/Blue agentic duel on the RAG pipeline
 
 ## Stack
 
