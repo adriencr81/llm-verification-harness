@@ -29,3 +29,9 @@ Thumbs.db
 *.log
 report.json
 # Préemptif : la Brique 5 générera des rapports, on ne veut pas les committer.
+
+# --- Corpus PDF (Brique 1) ---
+corpus/pdfs/
+# Les PDFs eux-mêmes ne sont pas versionnés (blobs binaires lourds).
+# La reproductibilité est garantie par corpus/manifest.yaml (URL + SHA256)
+# et par download_corpus.py (à venir).

@@ -1,0 +1,124 @@
+# Manifest du corpus ANSSI — llm-verification-harness / Brique 1
+#
+# Contrat de non-altération : chaque PDF est identifié par son SHA256.
+# download_corpus.py refuse de continuer en cas de mismatch (hash calculé
+# != hash déclaré ici) — dérive silencieuse du corpus interdite.
+#
+# Sémantique des URLs
+#   download_url  : URL directe et stable vers le PDF (téléchargement auto)
+#                   null quand la source n'expose pas d'URL directe stable.
+#   landing_page  : URL humaine (page de présentation ANSSI) — pour le
+#                   fallback manuel et pour la traçabilité VCD.
+#   signed_url    : true quand la source est derrière un S3 présigné (OVH
+#                   `sf-cyber`, expiration ~1h). Dans ce cas download_url
+#                   est null et le script demande un téléchargement manuel
+#                   depuis landing_page.
+#
+# Identité stable
+#   doc_id : slug court immuable. C'est LUI qui identifie un document dans
+#            les chunks, les cas de test et le VCD — pas le filename.
+#            Un renommage de filename ne casse jamais la traçabilité amont.
+
+schema_version: 1
+license: "Licence Ouverte 2.0 (Etalab)"
+source_authority: ANSSI
+
+documents:
+  - doc_id: active-directory
+    filename: reco-active-directory.pdf
+    title: "Recommandations pour l'administration sécurisée des SI reposant sur Active Directory"
+    download_url: null
+    landing_page: https://messervices.cyber.gouv.fr/guides/recommandations-pour-ladministration-securisee-des-si-reposant-sur-ad
+    signed_url: true
+    sha256: ca393cf0f69ea0a6f5a8623a4f1b0a846bf8a2cf4aaed380f2c02f54a6dbfa93
+    downloaded_at: 2026-07-01
+
+  - doc_id: admin-si
+    filename: admin-securisee-si.pdf
+    title: "Recommandations relatives à l'administration sécurisée des systèmes d'information"
+    download_url: https://messervices.cyber.gouv.fr/documents-guides/anssi-guide-admin_securisee_si_v3-0.pdf
+    landing_page: null
+    signed_url: false
+    sha256: edfed852c9568dd382c4dec0497579c84e12edd8d75b223bf7f8067c51a4f073
+    downloaded_at: 2026-07-01
+
+  - doc_id: cartographie
+    filename: cartographie-si.pdf
+    title: "Cartographie du système d'information"
+    download_url: https://messervices.cyber.gouv.fr/documents-guides/20181213_anssi_guide_cartographie_v1b.pdf
+    landing_page: null
+    signed_url: false
+    sha256: bda2636af6cfb6ab8de307795292b5de62354b0cc2ffefdbf09696fa8f531fd3
+    downloaded_at: 2026-07-01
+
+  - doc_id: docker
+    filename: docker.pdf
+    title: "Recommandations de sécurité relatives au déploiement de conteneurs Docker"
+    download_url: https://messervices.cyber.gouv.fr/documents-guides/docker_fiche_technique.pdf
+    landing_page: null
+    signed_url: false
+    sha256: 537a62608df849c0dda0c6b8115b57a3f60d015e8f9ce745f148eab8dc5ef544
+    downloaded_at: 2026-07-01
+
+  - doc_id: ebios-rm
+    filename: ebios-rm.pdf
+    title: "La méthode EBIOS Risk Manager – Le guide"
+    download_url: https://messervices.cyber.gouv.fr/documents-guides/250129_np_anssi_guide_ebios_fr_final_collection_WEB.pdf
+    landing_page: null
+    signed_url: false
+    sha256: 487046cc4bfdb744f0b3cdc13bbfa84630d9dfeed369ff676259baf0b2f21dd6
+    downloaded_at: 2026-07-01
+
+  - doc_id: hygiene
+    filename: guide-hygiene.pdf
+    title: "Guide d'hygiène informatique — 42 mesures"
+    download_url: https://messervices.cyber.gouv.fr/documents-guides/guide_hygiene_informatique_anssi.pdf
+    landing_page: null
+    signed_url: false
+    sha256: 95f2749422aed40a1055807d34b2d58cb7be267f7eeac4e186925cff71ca82ff
+    downloaded_at: 2026-07-01
+
+  - doc_id: mfa
+    filename: mfa-mots-de-passe.pdf
+    title: "Recommandations relatives à l'authentification multifacteur et aux mots de passe"
+    download_url: https://messervices.cyber.gouv.fr/documents-guides/anssi-guide-authentification_multifacteur_et_mots_de_passe.pdf
+    landing_page: null
+    signed_url: false
+    sha256: 9ebb1b593ea24dd0199df6cd410ab5839d3152f08ba58594bf402531b76f41cb
+    downloaded_at: 2026-07-01
+
+  - doc_id: nomadisme
+    filename: nomadisme.pdf
+    title: "Recommandations sur le nomadisme numérique"
+    download_url: https://messervices.cyber.gouv.fr/documents-guides/guide_nomadisme_anssi_pa_054_v2.pdf
+    landing_page: null
+    signed_url: false
+    sha256: 6098c084209fdaa6cc29ca44ba697ca34922294fdd247b52a8c92edee91a050f
+    downloaded_at: 2026-07-01
+
+  - doc_id: pacs
+    filename: pacs.pdf
+    title: "PACS — Référentiel d'exigences pour les prestataires d'accompagnement et de conseil en sécurité"
+    download_url: null
+    landing_page: https://cyber.gouv.fr/offre-de-service/solutions-certifiees-et-qualifiees/comprendre-levaluation-de-securite/qualification-de-produit-et-services/referentiels-qualification/
+    signed_url: true
+    sha256: 17a5593e8480e9ff9cdc1ae72746e159e1fb55b81a7a58887d0a2c1a221831a4
+    downloaded_at: 2026-07-01
+
+  - doc_id: secnumcloud
+    filename: secnumcloud.pdf
+    title: "SecNumCloud — Référentiel d'exigences pour les prestataires de services d'informatique en nuage"
+    download_url: null
+    landing_page: https://cyber.gouv.fr/enjeux-technologiques/cloud/
+    signed_url: true
+    sha256: b0991afeef5f647c78fd29bbdd79724705eee2200737e93141be77eecb5eb68a
+    downloaded_at: 2026-07-01
+
+  - doc_id: sites-web
+    filename: reco-sites-web.pdf
+    title: "Recommandations pour la mise en œuvre d'un site web — maîtriser les standards de sécurité côté navigateur"
+    download_url: https://messervices.cyber.gouv.fr/documents-guides/anssi-guide-recommandations_mise_en_oeuvre_site_web_maitriser_standards_securite_cote_navigateur-v2.0.pdf
+    landing_page: null
+    signed_url: false
+    sha256: c64d21b2f9397d84c42d6243cd0730374d2725dd76abd41c6fb967650f2e8b6c
+    downloaded_at: 2026-07-01
