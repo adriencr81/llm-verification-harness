@@ -1,2 +1,6 @@
 openai
 python-dotenv
+requests
+pyyaml
+pdfplumber
+pytest
