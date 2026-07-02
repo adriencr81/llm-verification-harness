@@ -18,6 +18,16 @@
 #   doc_id : slug court immuable. C'est LUI qui identifie un document dans
 #            les chunks, les cas de test et le VCD — pas le filename.
 #            Un renommage de filename ne casse jamais la traçabilité amont.
+#
+# Champs sous contrat (gelés, toute divergence est une régression IVVQ)
+#   sha256 : non-altération binaire du PDF (vérifiée par download_corpus.py)
+#   bytes  : taille du fichier sur disque en octets (sanity check amont
+#            pour les 3 docs signed_url dont le téléchargement est manuel)
+#   pages  : nombre de pages du PDF (invariant `page_ref <= pages` exploité
+#            par la vérification de provenance des chunks — Brique 2/3)
+#
+# Champs informatifs (peuvent être édités sans casser le contrat)
+#   title, filename, downloaded_at, download_url, landing_page, signed_url
 
 schema_version: 1
 license: "Licence Ouverte 2.0 (Etalab)"
@@ -31,6 +41,8 @@ documents:
     landing_page: https://messervices.cyber.gouv.fr/guides/recommandations-pour-ladministration-securisee-des-si-reposant-sur-ad
     signed_url: true
     sha256: ca393cf0f69ea0a6f5a8623a4f1b0a846bf8a2cf4aaed380f2c02f54a6dbfa93
+    bytes: 2872539
+    pages: 166
     downloaded_at: 2026-07-01
 
   - doc_id: admin-si
@@ -40,6 +52,8 @@ documents:
     landing_page: null
     signed_url: false
     sha256: edfed852c9568dd382c4dec0497579c84e12edd8d75b223bf7f8067c51a4f073
+    bytes: 1980796
+    pages: 78
     downloaded_at: 2026-07-01
 
   - doc_id: cartographie
@@ -49,6 +63,8 @@ documents:
     landing_page: null
     signed_url: false
     sha256: bda2636af6cfb6ab8de307795292b5de62354b0cc2ffefdbf09696fa8f531fd3
+    bytes: 555254
+    pages: 56
     downloaded_at: 2026-07-01
 
   - doc_id: docker
@@ -58,6 +74,8 @@ documents:
     landing_page: null
     signed_url: false
     sha256: 537a62608df849c0dda0c6b8115b57a3f60d015e8f9ce745f148eab8dc5ef544
+    bytes: 670943
+    pages: 22
     downloaded_at: 2026-07-01
 
   - doc_id: ebios-rm
@@ -67,6 +85,8 @@ documents:
     landing_page: null
     signed_url: false
     sha256: 487046cc4bfdb744f0b3cdc13bbfa84630d9dfeed369ff676259baf0b2f21dd6
+    bytes: 3789509
+    pages: 100
     downloaded_at: 2026-07-01
 
   - doc_id: hygiene
@@ -76,6 +96,8 @@ documents:
     landing_page: null
     signed_url: false
     sha256: 95f2749422aed40a1055807d34b2d58cb7be267f7eeac4e186925cff71ca82ff
+    bytes: 1724994
+    pages: 72
     downloaded_at: 2026-07-01
 
   - doc_id: mfa
@@ -85,6 +107,8 @@ documents:
     landing_page: null
     signed_url: false
     sha256: 9ebb1b593ea24dd0199df6cd410ab5839d3152f08ba58594bf402531b76f41cb
+    bytes: 654280
+    pages: 52
     downloaded_at: 2026-07-01
 
   - doc_id: nomadisme
@@ -94,6 +118,8 @@ documents:
     landing_page: null
     signed_url: false
     sha256: 6098c084209fdaa6cc29ca44ba697ca34922294fdd247b52a8c92edee91a050f
+    bytes: 3347986
+    pages: 94
     downloaded_at: 2026-07-01
 
   - doc_id: pacs
@@ -103,6 +129,8 @@ documents:
     landing_page: https://cyber.gouv.fr/offre-de-service/solutions-certifiees-et-qualifiees/comprendre-levaluation-de-securite/qualification-de-produit-et-services/referentiels-qualification/
     signed_url: true
     sha256: 17a5593e8480e9ff9cdc1ae72746e159e1fb55b81a7a58887d0a2c1a221831a4
+    bytes: 517766
+    pages: 62
     downloaded_at: 2026-07-01
 
   - doc_id: secnumcloud
@@ -112,6 +140,8 @@ documents:
     landing_page: https://cyber.gouv.fr/enjeux-technologiques/cloud/
     signed_url: true
     sha256: b0991afeef5f647c78fd29bbdd79724705eee2200737e93141be77eecb5eb68a
+    bytes: 620184
+    pages: 55
     downloaded_at: 2026-07-01
 
   - doc_id: sites-web
@@ -121,4 +151,6 @@ documents:
     landing_page: null
     signed_url: false
     sha256: c64d21b2f9397d84c42d6243cd0730374d2725dd76abd41c6fb967650f2e8b6c
+    bytes: 736747
+    pages: 76
     downloaded_at: 2026-07-01
