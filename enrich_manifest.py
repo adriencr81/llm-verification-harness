@@ -1,15 +1,17 @@
 """Enrichit corpus/manifest.yaml avec `bytes` et `pages` par doc — one-shot Brique 1.
 
-Motivation IVVQ (référencée [REQ-CORPUS-02] dans le VCD Brique 7) :
-    `sha256` seul garantit la non-altération binaire du PDF. Il ne donne
-    aucune prise pour croiser la sortie de l'extraction (Brique 2). En
-    ajoutant `pages` au manifest, on obtient une invariant vérifiable :
-    tout chunk portant provenance `(doc_id, page=N)` doit satisfaire
-    N <= pages du doc — sinon erreur de provenance détectée immédiatement,
-    sans avoir à réouvrir le PDF.
+Motivation IVVQ (voir docs/REQUIREMENTS.md, cités par le VCD Brique 7) :
+    `sha256` [REQ-CORPUS-01] seul garantit la non-altération binaire du
+    PDF. Il ne donne aucune prise pour croiser la sortie de l'extraction
+    (Brique 2). En ajoutant `pages` [REQ-CORPUS-02] au manifest, on
+    obtient un invariant vérifiable : tout chunk portant provenance
+    `(doc_id, page=N)` doit satisfaire N <= pages du doc — sinon erreur
+    de provenance détectée immédiatement, sans avoir à réouvrir le PDF.
 
-    `bytes` est un sanity check amont (fichier tronqué, mauvais fichier
-    déposé manuellement pour les 3 docs signed_url).
+    `bytes` [REQ-CORPUS-03] est un sanity check amont léger — fichier
+    tronqué ou mauvais fichier déposé manuellement pour les 3 docs
+    signed_url. Vérifié par `download_corpus.verify_document` en préambule
+    au check SHA256, via l'exception `CorpusSizeError`.
 
 Ces valeurs sont gelées comme le SHA256 : script à ne re-jouer qu'en cas
 de bump conscient du corpus (nouveau doc, remplacement d'un doc).
