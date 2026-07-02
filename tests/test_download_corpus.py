@@ -170,6 +170,77 @@ def test_fetch_failure_leaves_no_partial_file(
     assert not destination.with_name(destination.name + ".tmp").exists()
 
 
+def test_declared_bytes_mismatch_raises_size_error(
+    sample_pdf: Path, sample_manifest_entry: dict
+) -> None:
+    """REQ-CORPUS-03 : le champ ``bytes`` est un contrat, pas une annotation.
+
+    Un fichier de bonne longueur peut encore avoir un SHA256 correct — mais
+    un fichier de mauvaise longueur ne peut PAS avoir le hash déclaré. On
+    déclenche donc l'erreur au check taille (cheap) avant d'ouvrir un
+    hachage complet (coûteux).
+    """
+    sample_manifest_entry["bytes"] = sample_pdf.stat().st_size + 1
+
+    with pytest.raises(download_corpus.CorpusSizeError) as excinfo:
+        download_corpus.verify_document(sample_manifest_entry, sample_pdf.parent)
+    message = str(excinfo.value)
+    assert "size mismatch" in message.lower()
+    assert sample_manifest_entry["doc_id"] in message
+
+
+def test_size_error_is_a_corpus_error(
+    sample_pdf: Path, sample_manifest_entry: dict
+) -> None:
+    """Brique 7 VCD consumer relies on the CorpusError umbrella."""
+    sample_manifest_entry["bytes"] = 0
+
+    with pytest.raises(download_corpus.CorpusError):
+        download_corpus.verify_document(sample_manifest_entry, sample_pdf.parent)
+
+
+def test_bytes_absent_from_manifest_skips_size_check(
+    sample_pdf: Path, sample_manifest_entry: dict
+) -> None:
+    """Le check taille est opt-in : un doc sans ``bytes`` passe sans lever.
+
+    Garantit qu'un enrich_manifest.py partiel (ex : le doc vient d'être
+    ajouté et pas encore enrichi) ne casse pas la vérification amont.
+    """
+    assert "bytes" not in sample_manifest_entry
+    download_corpus.verify_document(sample_manifest_entry, sample_pdf.parent)
+
+
+def test_verify_all_accumulates_size_errors(tmp_path: Path) -> None:
+    """Un size error alimente ``report.size_errors`` (pas integrity_errors)."""
+    good_pdf = tmp_path / "good.pdf"
+    good_pdf.write_bytes(b"payload")
+    wrong_size_pdf = tmp_path / "wrong.pdf"
+    wrong_size_pdf.write_bytes(b"payload")
+
+    documents = [
+        {
+            "doc_id": "good",
+            "filename": "good.pdf",
+            "sha256": hashlib.sha256(good_pdf.read_bytes()).hexdigest(),
+            "bytes": good_pdf.stat().st_size,
+        },
+        {
+            "doc_id": "wrong-size",
+            "filename": "wrong.pdf",
+            "sha256": hashlib.sha256(wrong_size_pdf.read_bytes()).hexdigest(),
+            "bytes": wrong_size_pdf.stat().st_size + 42,
+        },
+    ]
+
+    report = download_corpus.verify_all(documents, tmp_path)
+
+    assert not report.ok
+    assert report.integrity_errors == []
+    assert len(report.size_errors) == 1
+    assert "wrong-size" in report.size_errors[0]
+
+
 def test_load_manifest_roundtrip(tmp_path: Path, sample_manifest_entry: dict) -> None:
     manifest_path = tmp_path / "manifest.yaml"
     manifest_path.write_text(

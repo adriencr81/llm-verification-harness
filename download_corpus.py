@@ -12,8 +12,11 @@ cryptographique" property cited by the VCD (Brique 7). Silent drift is refused
 by construction — any change must be either restored or explicitly acknowledged
 by bumping the manifest.
 
-Upstream requirement: corpus non-alteration (to be catalogued as REQ-CORPUS-01
-in Brique 5; cited by VCD §corpus in Brique 7).
+Upstream requirements (see docs/REQUIREMENTS.md, provisoire jusqu'à Brique 5,
+cited by VCD §corpus in Brique 7) :
+- REQ-CORPUS-01 : non-altération binaire (SHA256) — enforcée à chaque run.
+- REQ-CORPUS-03 : sanity check de taille (bytes) — opt-in, exécuté avant
+  SHA256 quand le champ `bytes` est présent au manifest.
 """
 
 from __future__ import annotations
@@ -52,6 +55,22 @@ class CorpusIntegrityError(CorpusError):
     """A PDF on disk diverges from the SHA256 declared in the manifest."""
 
 
+class CorpusSizeError(CorpusError):
+    """A PDF's on-disk size diverges from the ``bytes`` declared in the manifest.
+
+    Detected before the SHA256 pass — cheap sanity check, especially useful
+    for the 3 docs behind a ``signed_url`` where the download is manual and
+    a truncated file or the wrong file can be silently deposited.
+
+    Distinct from :class:`CorpusIntegrityError` on purpose: a size mismatch
+    says "you deposited a different file", a SHA256 mismatch says "you
+    modified this file's content". Different IVVQ signals, different
+    triage.
+
+    Upstream requirement: REQ-CORPUS-03 (see docs/REQUIREMENTS.md).
+    """
+
+
 class MissingSourceError(CorpusError):
     """A PDF is absent and cannot be fetched automatically."""
 
@@ -67,10 +86,13 @@ class VerificationReport:
 
     integrity_errors: list[str] = field(default_factory=list)
     missing_errors: list[str] = field(default_factory=list)
+    size_errors: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
-        return not self.integrity_errors and not self.missing_errors
+        return not (
+            self.integrity_errors or self.missing_errors or self.size_errors
+        )
 
 
 def sha256_of_file(path: Path) -> str:
@@ -120,6 +142,12 @@ def verify_document(doc: dict, pdf_dir: Path) -> None:
     required), plus ``download_url`` and ``landing_page`` (both optional; they
     drive the fetch behaviour when the file is missing).
 
+    Raises :class:`CorpusSizeError` when ``bytes`` is declared in the manifest
+    and diverges from the actual file size — checked before SHA256 so that a
+    wrong-file swap is caught by the cheap check rather than the expensive
+    one. The size check is opt-in: a manifest entry without ``bytes`` skips
+    it silently.
+
     Raises :class:`CorpusIntegrityError` when the on-disk SHA256 diverges from
     the declared hash. Raises :class:`MissingSourceError` when the file is
     absent and cannot be fetched (either no direct URL, or the fetch itself
@@ -154,6 +182,22 @@ def verify_document(doc: dict, pdf_dir: Path) -> None:
                 f"  Then re-run this script."
             ) from err
 
+    # REQ-CORPUS-03 — opt-in fail-fast filter (catches wrong-file swap /
+    # truncation without paying for a full hash). Never a substitute for
+    # the SHA256 pass below: two files of identical length can still
+    # differ byte for byte.
+    declared_size = doc.get("bytes")
+    if declared_size is not None:
+        actual_size = local_path.stat().st_size
+        if actual_size != declared_size:
+            raise CorpusSizeError(
+                f"[{doc_id}] size mismatch — declared {declared_size} bytes, "
+                f"file on disk is {actual_size} bytes.\n"
+                f"  file:     {local_path}\n"
+                f"  Restore the original file or bump the manifest "
+                f"(bytes + sha256) deliberately."
+            )
+
     actual_hash = sha256_of_file(local_path)
     if actual_hash != expected_hash:
         raise CorpusIntegrityError(
@@ -181,6 +225,9 @@ def verify_all(documents: Iterable[dict], pdf_dir: Path) -> VerificationReport:
         except CorpusIntegrityError as err:
             report.integrity_errors.append(str(err))
             print(f"[{doc_id}] FAIL — integrity", file=sys.stderr)
+        except CorpusSizeError as err:
+            report.size_errors.append(str(err))
+            print(f"[{doc_id}] FAIL — size", file=sys.stderr)
         except MissingSourceError as err:
             report.missing_errors.append(str(err))
             print(f"[{doc_id}] FAIL — missing source", file=sys.stderr)
@@ -197,6 +244,10 @@ def main() -> int:
     if report.integrity_errors:
         print("\n=== INTEGRITY FAILURES ===", file=sys.stderr)
         for err in report.integrity_errors:
+            print(err, file=sys.stderr)
+    if report.size_errors:
+        print("\n=== SIZE FAILURES ===", file=sys.stderr)
+        for err in report.size_errors:
             print(err, file=sys.stderr)
     if report.missing_errors:
         print("\n=== MISSING SOURCES ===", file=sys.stderr)
