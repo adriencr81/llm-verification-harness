@@ -23,14 +23,45 @@ le hash déclaré doit être détectée et refusée sans intervention manuelle.
 ### `REQ-CORPUS-02` — Invariant de provenance (`pages`)
 
 Toute déclaration de provenance de chunk `(doc_id, page=N)` produite par
-l'extraction (Brique 2) et le chunking (Brique 3) doit satisfaire
-`N <= pages(doc)` du manifest, sans réouverture du PDF. L'exigence
-transitive : le champ `pages` du manifest est gelé au même titre que
-`sha256`.
+l'extraction et le chunking doit satisfaire `N <= pages(doc)` du
+manifest, sans réouverture du PDF. L'exigence transitive : le champ
+`pages` du manifest est gelé au même titre que `sha256`.
+
+**Enforcement** — `extract_pdf.extract_doc` refuse d'émettre des Pages
+si le count réel du PDF diverge du `pages` déclaré au manifest. La
+vérification est une **égalité stricte** (`actual == manifest.pages`).
+Cette égalité stricte **implique** l'invariant `N <= pages(doc)` par
+construction sur tout chunk issu de ces Pages : puisque `page_num`
+est produit par énumération 1-indexée de `[1, len(pages)]` et que
+`len(pages) == manifest.pages`, alors `N <= manifest.pages` tient sans
+vérification chunk-side redondante.
+
+**Statut** — *enforced at Page boundary*. Le chunk-side reste
+*pending* jusqu'à la livraison du chunking (lot suivant Brique 1), qui
+héritera de l'invariant par construction (`chunk.page_num ==
+page.page_num` sans réouverture du PDF). Le passage à *fully enforced*
+sera formalisé quand `chunks.json` sera produit.
+
+**Paramètre pipeline associé** — `extract_pdf.NOISE_THRESHOLD = 0.5`
+gouverne la détection header/footer par répétition (une ligne dont le
+hash normalisé apparaît sur ≥ 50% des pages est retirée). Valeur
+empiriquement défendable : le motif corps le plus fréquent hors bruit
+sur EBIOS-RM (le doc le plus contaminé) reste sous ~37% — sous le
+seuil, préservé. Cible du VCD Brique 7 comme paramètre traçable, pas
+comme constante gravée.
 
 - **Producteur** : `enrich_manifest.py` (fige `pages` par lecture pdfplumber)
-- **Consommateurs (à venir)** : module d'extraction, module de chunking
-- **Test** : (à venir Brique 2 — vérification côté chunk)
+- **Consommateur (extraction)** : `extract_pdf.extract_doc` — enforced
+- **Consommateur (chunking)** : à venir (lot suivant Brique 1)
+- **Tests amont** :
+  - `tests/test_extract_pdf.py::test_extract_pages_expected_page_count_mismatch_raises`
+  - `tests/test_extract_pdf.py::test_extract_doc_enforces_manifest_page_count`
+  - `tests/test_extract_pdf.py::test_page_count_mismatch_is_catchable_as_corpus_error`
+- **Test-sentinelle cas dégradé** : `tests/test_extract_pdf.py::test_extract_pages_hygiene_documented_limit_current_behavior`
+  (fige la baseline 45/72 pages contaminées sur `guide-hygiene.pdf`)
+- **Exception** : `extract_pdf.PageCountMismatchError` — héritage
+  multiple `(CorpusError, ExtractionError)`, catchable des deux côtés
+  (contrat corpus ET pipeline extraction), voir son docstring.
 
 ### `REQ-CORPUS-03` — Sanity check de taille (`bytes`)
 

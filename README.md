@@ -25,7 +25,7 @@ Built incrementally, one brique per week:
 
 - [x] Brique 0 — Project skeleton + first LLM call (observe non-determinism)
 - [ ] Brique 1 — Document ingestion, chunking, provenance tracking *(in progress
-      — corpus contract shipped; PDF extraction + chunking next)*
+      — corpus contract + PDF extraction shipped; chunking next)*
 - [ ] Brique 2 — Embeddings and semantic retrieval (cosine similarity)
 - [ ] Brique 3 — Full RAG pipeline (question → retrieve → generate)
 - [ ] Brique 4 — OWASP LLM01 (indirect prompt injection) test
@@ -58,11 +58,14 @@ enforcement status — the README does not conflate "declared" with
   truncation — never a substitute for SHA256. Consumer:
   `download_corpus.verify_document`. Violations surfaced as
   `CorpusSizeError`.
-- **`REQ-CORPUS-02` — Page-count invariant** *(declared, consumer pending
-  Brique 2/3)*. Chunk provenance `(doc_id, page=N)` must satisfy
-  `N ≤ pages(doc)`. The `pages` field is frozen in the manifest by
-  `enrich_manifest.py` today; enforcement moves to chunk consumers when
-  they land.
+- **`REQ-CORPUS-02` — Page-count invariant** *(enforced upstream at
+  extraction; chunk consumer pending)*. Chunk provenance
+  `(doc_id, page=N)` must satisfy `N ≤ pages(doc)`. The `pages` field is
+  frozen in the manifest by `enrich_manifest.py`;
+  `extract_pdf.extract_doc` refuses to emit Pages whose count diverges
+  from the manifest (`PageCountMismatchError`). The chunking step will
+  inherit the invariant transitively — `chunk.page_num == page.page_num`
+  by construction, no PDF re-open.
 
 The manifest-enrichment tool `enrich_manifest.py` is itself covered by
 IVVQ-style tests:
@@ -80,9 +83,10 @@ non-regression sentinel.
 
 Brique 0 complete. Brique 1 in progress — corpus contract foundation
 delivered (REQ-CORPUS-01 enforced, REQ-CORPUS-03 enforced opt-in,
-REQ-CORPUS-02 declared). Remaining before Brique 1 closes: `doc_id`
-baseline test, PDF extraction via `pdfplumber`, chunking with attached
-provenance, `chunks.json` deliverable.
+REQ-CORPUS-02 enforced upstream at extraction). `doc_id` baseline test
+in place. PDF extraction via `pdfplumber` shipped with
+repetition-based header/footer stripping. Remaining before Brique 1
+closes: chunking with attached provenance, `chunks.json` deliverable.
 
 ## Stack
 
@@ -110,8 +114,34 @@ document (idempotent — no-op if all entries already carry both fields):
 python enrich_manifest.py
 ```
 
+Extract a PDF into logical Pages (1-indexed, header/footer stripped by
+**repetition** rather than geometry — see design rationale in
+`extract_pdf.py` module docstring — page count checked against
+manifest per REQ-CORPUS-02):
+
+```python
+from pathlib import Path
+from extract_pdf import extract_doc, load_manifest
+
+manifest = load_manifest(Path("corpus/manifest.yaml"))
+pages = extract_doc(manifest, "ebios-rm", Path("corpus/pdfs"))
+```
+
 Run the test suite:
 
 ```
 python -m pytest -q
 ```
+
+## Development workflow
+
+Two integration tests hit the real (git-ignored) ANSSI corpus and are
+skipped in CI: `test_extract_pages_ad_real_pdf_strips_footer` and
+`test_extract_pages_hygiene_documented_limit_current_behavior`. Their
+CI-safe equivalent for the header/footer stripper is
+`test_extract_pages_strips_footer_with_alternating_page_number_position`
+(reportlab fixture, always runs). Contributors touching the extraction
+pipeline must run the two skipped tests locally before opening a PR
+and include the pytest output in the PR description — the hygiene one
+is a **sentinel** that fails in both directions (regression **and**
+improvement), so a fix that lowers the baseline is caught explicitly.
