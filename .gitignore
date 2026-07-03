@@ -3,7 +3,7 @@
 .env.*
 !.env.example
 # La clé API et tout secret va dans .env (ignoré).
-# .env.example sera committé un jour comme template public (sans valeurs).
+# .env.example est committé comme template public (sans valeurs).
 
 # --- Environnement virtuel ---
 .venv/
