@@ -34,6 +34,7 @@ class GoalAssessment:
     score: int      # 0–10
     feedback: str   # pourquoi le goal n'est pas encore atteint
     tokens_used: int
+    temperature: float  # paramètre effectif de l'appel juge — reproductibilité
 
 
 @dataclass
@@ -79,12 +80,21 @@ class GoalDrivenLoop:
         judge_model: Optional[str] = None,
         max_attempts: int = 4,
         pass_threshold: int = 7,
+        temperature: float = 0.0,
+        judge_temperature: float = 0.0,
+        seed: Optional[int] = None,
     ):
         self.client = client
         self.model = model
         self.judge_model = judge_model or model
         self.max_attempts = max_attempts
         self.pass_threshold = pass_threshold
+        # temperature=0.0 par défaut : ce projet est un banc de vérification,
+        # la reproductibilité des tentatives et du jugement n'est pas
+        # optionnelle. `seed` est propagé quand le provider le supporte.
+        self.temperature = temperature
+        self.judge_temperature = judge_temperature
+        self.seed = seed
 
     # -- Étape 3 : Agent acts ------------------------------------------------
 
@@ -92,6 +102,8 @@ class GoalDrivenLoop:
         resp = self.client.chat.completions.create(
             model=self.model,
             max_tokens=1024,
+            temperature=self.temperature,
+            seed=self.seed,
             messages=messages,
         )
         return resp.choices[0].message.content, resp.usage.total_tokens
@@ -105,6 +117,8 @@ class GoalDrivenLoop:
         resp = self.client.chat.completions.create(
             model=self.judge_model,
             max_tokens=256,
+            temperature=self.judge_temperature,
+            seed=self.seed,
             messages=[
                 {"role": "system", "content": _JUDGE_SYSTEM},
                 {"role": "user", "content": prompt},
@@ -120,6 +134,7 @@ class GoalDrivenLoop:
                 score=score,
                 feedback=str(data.get("feedback", "")),
                 tokens_used=resp.usage.total_tokens,
+                temperature=self.judge_temperature,
             )
         except (json.JSONDecodeError, KeyError, ValueError):
             return GoalAssessment(
@@ -127,6 +142,7 @@ class GoalDrivenLoop:
                 score=0,
                 feedback=f"Juge non parseable : {raw[:120]}",
                 tokens_used=resp.usage.total_tokens,
+                temperature=self.judge_temperature,
             )
 
     # -- Trigger + boucle principale -----------------------------------------

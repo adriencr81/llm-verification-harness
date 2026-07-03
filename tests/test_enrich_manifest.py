@@ -165,6 +165,36 @@ def test_missing_pdf_exits_nonzero_without_writing(two_docs) -> None:
     assert before == after, "manifest modifié malgré échec — écriture non-atomique"
 
 
+def test_partial_enrichment_raises_valueerror_without_writing(tmp_path: Path) -> None:
+    """Un doc avec `bytes` mais pas `pages` (ou l'inverse) est un état
+    semi-enrichi incohérent — cf. bug relevé en review : l'insertion par
+    match sha256 ne sait pas cibler un champ précis et dupliquerait
+    `bytes:` si on laissait passer ce cas."""
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    pdf_a = pdf_dir / "a.pdf"
+    _make_pdf(pdf_a, pages=1)
+
+    docs = [
+        {
+            "doc_id": "a",
+            "filename": "a.pdf",
+            "sha256": hashlib.sha256(pdf_a.read_bytes()).hexdigest(),
+            "bytes": 123,  # présent seul, sans `pages` — état incohérent
+        },
+    ]
+    manifest_path = tmp_path / "manifest.yaml"
+    _make_manifest(manifest_path, docs)
+    before = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+    with pytest.raises(ValueError) as excinfo:
+        enrich_manifest.enrich(manifest_path, pdf_dir)
+    assert "semi-enrichi" in str(excinfo.value).lower()
+
+    after = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    assert before == after, "manifest modifié malgré rejet de la précondition"
+
+
 def test_matcher_rejects_lookalike_lines() -> None:
     """Sentinelle de non-régression du contrat de forme de ``SHA_LINE_RE``.
 

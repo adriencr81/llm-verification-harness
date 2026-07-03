@@ -4,8 +4,10 @@ Aerospace-grade verification methodology applied to RAG/LLM evaluation.
 
 A formal verification harness for retrieval-augmented LLM systems, built brique
 by brique to demonstrate how safety-critical IVVQ practices transpose to
-non-deterministic AI substrates. Coverage targets OWASP LLM Top 10 and MITRE
-ATLAS. The signature deliverable is a Verification Control Document (VCD)
+non-deterministic AI substrates. Coverage targets specific OWASP LLM Top 10
+(2023) items — LLM01 (prompt injection), LLM02 (insecure output handling),
+LLM09 (overreliance/faithfulness) — planned for Briques 4 and 6, not the full
+Top 10. The signature deliverable is a Verification Control Document (VCD)
 generated automatically from each test run.
 
 ## Why this project

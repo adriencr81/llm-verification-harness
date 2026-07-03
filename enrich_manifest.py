@@ -74,6 +74,22 @@ def enrich(manifest_path: Path, pdf_dir: Path) -> int:
             "identité binaire du manifest violée, refus d'enrichir."
         )
 
+    # Précondition d'atomicité champ-à-champ : `bytes` et `pages` sont
+    # gelés ensemble (cf. procédure de bump dans corpus/README.md — les
+    # deux s'effacent ensemble). Un doc qui n'a qu'un des deux est un état
+    # semi-enrichi incohérent : l'insérer laisserait passer une 2e clé
+    # `bytes:`/`pages:` dupliquée en aval (l'insertion cible la ligne
+    # sha256, pas un champ précis). On refuse plutôt que de deviner.
+    partial = [
+        d["doc_id"] for d in documents
+        if ("bytes" in d) != ("pages" in d)
+    ]
+    if partial:
+        raise ValueError(
+            "État semi-enrichi détecté (bytes/pages doivent être présents "
+            f"ensemble ou absents ensemble) : {partial} — refus d'enrichir."
+        )
+
     to_enrich = [
         d for d in documents
         if "bytes" not in d or "pages" not in d
@@ -111,7 +127,8 @@ def enrich(manifest_path: Path, pdf_dir: Path) -> int:
         if doc is None:
             continue
         if "bytes" in doc and "pages" in doc:
-            # Doc déjà enrichi lors d'un run précédent partiel — skip.
+            # Doc déjà entièrement enrichi (les états semi-enrichis sont
+            # rejetés en amont) — absent de `stats`, skip.
             continue
         indent = m.group("indent")
         n_bytes, n_pages = stats[doc["doc_id"]]
