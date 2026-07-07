@@ -18,6 +18,7 @@ Two layers:
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -131,13 +132,32 @@ def test_extract_all_writes_one_line_per_page(tmp_path):
 
 def test_extract_all_preserves_manifest_document_order(tmp_path):
     """First doc in manifest must be first block in output — VCD needs
-    a deterministic ordering to cite ``pages.jsonl`` slices."""
-    manifest, pdf_dir, out = _build_two_doc_fixture(tmp_path)
+    a deterministic ordering to cite ``pages.jsonl`` slices.
+
+    Uses ``zeta`` before ``alpha`` in the manifest so a regression
+    that ``sorted()``s docs (alphabetic) would swap them and fail the
+    assertion — the previous ``doc-a``/``doc-b`` fixture was already
+    alphabetic and would have passed such a regression silently.
+    """
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    _make_pdf(pdf_dir / "zeta.pdf", [["gamma tres"], ["delta cuatro"]])
+    _make_pdf(pdf_dir / "alpha.pdf", [["alpha uno"], ["bravo duo"]])
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest = _write_fixture_manifest(
+        manifest_path,
+        [
+            {"doc_id": "zeta", "filename": "zeta.pdf", "pages": 2},
+            {"doc_id": "alpha", "filename": "alpha.pdf", "pages": 2},
+        ],
+    )
+    out = tmp_path / "pages.jsonl"
     extract_all(manifest, pdf_dir, out)
     records = [json.loads(l) for l in out.read_text(encoding="utf-8").splitlines()]
     doc_id_sequence = [r["doc_id"] for r in records]
-    # doc-a fills positions 0..2, doc-b fills 3..4 — no interleaving
-    assert doc_id_sequence == ["doc-a"] * 3 + ["doc-b"] * 2
+    # zeta first (manifest order), then alpha — a sorted() regression
+    # would produce ["alpha"] * 2 + ["zeta"] * 2 and fail this.
+    assert doc_id_sequence == ["zeta"] * 2 + ["alpha"] * 2
 
 
 def test_extract_all_emits_1_indexed_monotone_page_num_per_doc(tmp_path):
@@ -229,6 +249,16 @@ def _load_baseline() -> list[dict]:
     Fails loudly if absent: the file is versioned, so a missing
     baseline on a fresh clone means the extraction pipeline was
     broken during a merge, not a normal state to skip over.
+
+    Read discipline:
+    - ``newline=""`` disables universal-newline translation. Without
+      it, a CRLF-checked-out file would be silently normalized to LF
+      on read and a broken EOL state would pass tests.
+    - ``split("\\n")`` — matches the writer (``handle.write("\\n")``)
+      and refuses the 7 extra Unicode line separators that
+      ``str.splitlines()`` would swallow (U+2028, U+2029, etc.) — any
+      of those inside a French page's text would silently inflate the
+      record count.
     """
     if not PAGES_JSONL_PATH.exists():
         pytest.fail(
@@ -236,10 +266,8 @@ def _load_baseline() -> list[dict]:
             "The baseline is versioned — regenerate with "
             "`python extract_all.py` and commit."
         )
-    return [
-        json.loads(line)
-        for line in PAGES_JSONL_PATH.read_text(encoding="utf-8").splitlines()
-    ]
+    content = PAGES_JSONL_PATH.read_text(encoding="utf-8", newline="")
+    return [json.loads(line) for line in content.split("\n") if line]
 
 
 def test_baseline_is_valid_jsonl_with_expected_keys():
@@ -287,6 +315,42 @@ def test_baseline_page_num_is_1_indexed_and_contiguous_per_doc():
         assert page_nums == expected, (
             f"[{doc_id}] page_num sequence broken: got {page_nums[:5]}..."
         )
+
+
+def test_baseline_hash_matches_manifest():
+    """Bit-for-bit contract, machine-enforced.
+
+    Mirrors REQ-CORPUS-01 (SHA256 on PDFs) on the derived baseline.
+    Any drift — including a *text-only* drift that leaves counts and
+    ordering intact — fails here without depending on a human running
+    ``git diff``. Materializes REQ-CORPUS-04 at CI level.
+    """
+    manifest = load_manifest(MANIFEST_PATH)
+    declared = manifest["derived_artifacts"]["pages_jsonl"]["sha256"]
+    actual = hashlib.sha256(PAGES_JSONL_PATH.read_bytes()).hexdigest()
+    assert actual == declared, (
+        f"corpus/pages.jsonl SHA256 mismatch — baseline drift.\n"
+        f"  declared: {declared}\n"
+        f"  actual:   {actual}\n"
+        f"  Either restore the baseline or regenerate deliberately "
+        f"(python extract_all.py) and bump derived_artifacts."
+        f"pages_jsonl.sha256 in corpus/manifest.yaml."
+    )
+
+
+def test_baseline_uses_lf_line_endings_only():
+    """The bit-for-bit contract is platform-invariant.
+
+    A CR byte anywhere in the on-disk file would mean either a
+    Windows checkout with CRLF translation active (`.gitattributes`
+    misconfigured / absent) or a writer that stopped forcing
+    ``newline="\\n"``. Either breaks the SHA256 contract silently.
+    """
+    raw = PAGES_JSONL_PATH.read_bytes()
+    assert b"\r" not in raw, (
+        "CR byte found in corpus/pages.jsonl — likely a CRLF checkout "
+        "on Windows. Verify .gitattributes pins `eol=lf` on this file."
+    )
 
 
 def test_baseline_preserves_manifest_document_order():

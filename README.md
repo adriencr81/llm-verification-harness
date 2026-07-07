@@ -69,14 +69,42 @@ enforcement status — the README does not conflate "declared" with
   `test_baseline_page_count_per_doc_matches_manifest`. The chunking
   step will inherit the invariant transitively — `chunk.page_num ==
   page.page_num` by construction, no PDF re-open.
-- **`REQ-CORPUS-04` — Persisted extraction baseline** *(enforced)*.
-  PDF→text extraction is committed to
+- **`REQ-CORPUS-04` — Persisted extraction baseline, SHA256-locked**
+  *(enforced)*. PDF→text extraction is committed to
   [`corpus/pages.jsonl`](corpus/pages.jsonl) — one JSON record per
-  page, in manifest order, 1-indexed. Silent extractor drift is
-  detectable via `git diff` on that file (same contract shape as
-  `REQ-CORPUS-01` on the PDFs themselves). Producer:
-  `extract_all.extract_all`. Deterministic-write pinning:
-  `test_extract_all_second_run_is_bit_for_bit_identical`.
+  page, in manifest order, 1-indexed — and its SHA256 is frozen in
+  [`corpus/manifest.yaml`](corpus/manifest.yaml) under
+  `derived_artifacts.pages_jsonl.sha256`. Symmetric to
+  `REQ-CORPUS-01` on the source PDFs: silent extractor drift
+  (including *text-only* drift that leaves counts and ordering
+  intact) fails `test_baseline_hash_matches_manifest` at CI level,
+  without depending on a human running `git diff`. LF line endings
+  pinned across platforms by `.gitattributes`. Producer:
+  `extract_all.extract_all`, under the `pdfplumber` version declared
+  in `derived_artifacts.pages_jsonl.producer_env`.
+
+### Known extraction quality (Brique 1)
+
+The persisted baseline is a raw pdfplumber output — no post-processing
+beyond the repetition-based header/footer strip described in
+[`extract_pdf.py`](extract_pdf.py). Two known-noise patterns survive
+in `corpus/pages.jsonl` today:
+
+- **Cover pages** — several ANSSI guides render their title with a
+  custom vertical layout that pdfplumber extracts one glyph per line
+  (`"A\nN\nS\nS\nI\n..."`). Affects the first 1–2 pages of ~half the
+  corpus. Fragmented but not lost.
+- **`guide-hygiene.pdf`** — geometric layout with a single Y-bucket
+  per page defeats the repetition-based header/footer stripper on
+  its first pages. Documented as a `_strip_noise` limit in
+  [`extract_pdf.py`](extract_pdf.py); frozen as a sentinel test
+  (`test_extract_pages_hygiene_documented_limit_current_behavior`).
+
+These are consequences of the current extractor's design trade-offs,
+not silent failures — they are characterized here so the retrieval
+evaluation in Brique 2 can measure their impact on chunk quality
+before deciding whether a targeted regex pass or an OCR fallback is
+worth adding.
 
 The manifest-enrichment tool `enrich_manifest.py` is itself covered by
 IVVQ-style tests:

@@ -12,17 +12,23 @@ Design intent
 -------------
 - **Two-stage pipeline (persist between extraction and chunking)** — the
   chunker must not re-open PDFs. A single artifact on disk means:
-  extraction regressions are detectable by ``git diff`` on
-  ``pages.jsonl``; the ``guide-hygiene.pdf`` documented limit stays
-  inspectable at rest; chunking has a stable byte-for-byte input.
-- **Committed baseline** — ``corpus/pages.jsonl`` is versioned. The
-  contract is the same as the manifest SHA256: a silent drift is refused
-  by construction; a deliberate bump requires a PR. Materializes
-  REQ-CORPUS-04.
+  extraction regressions are machine-detectable via SHA256 (see below);
+  the ``guide-hygiene.pdf`` documented limit stays inspectable at rest;
+  chunking has a stable byte-for-byte input.
+- **Committed baseline with SHA256 gelé au manifest** — symmetric to
+  REQ-CORPUS-01 (PDF SHA256). ``corpus/pages.jsonl`` is versioned AND
+  its SHA256 is declared in ``corpus/manifest.yaml`` under
+  ``derived_artifacts.pages_jsonl.sha256``; a silent drift (including
+  a text-only drift that leaves counts and ordering intact) fails
+  ``test_baseline_hash_matches_manifest`` without depending on a
+  human running ``git diff``. Materializes REQ-CORPUS-04
+  machine-enforced end-to-end.
 - **Deterministic output** — manifest order for documents, 1-indexed
   ``page_num`` for pages, JSON keys emitted in ``(doc_id, page_num, text)``
   order, ``ensure_ascii=False`` so French text stays readable in ``git
-  diff``. Two runs on the same corpus must produce byte-identical files.
+  diff``, LF line endings forced by ``newline="\n"`` and pinned across
+  platforms by ``.gitattributes``. Two runs on the same corpus, same
+  ``pdfplumber`` version, must produce byte-identical files.
 - **Atomic write via ``.tmp`` sidecar** — same idiom as
   ``download_corpus.fetch``. A crash mid-run leaves the previous
   ``pages.jsonl`` intact; downstream never observes a truncated JSONL.
@@ -33,9 +39,12 @@ Upstream requirements (see ``docs/REQUIREMENTS.md``)
   :func:`extract_pdf.extract_doc` refuses to emit Pages if the actual
   count diverges from the manifest, so any line written here already
   satisfies ``page_num <= manifest.pages(doc_id)``.
-- **REQ-CORPUS-04** — Persisted extraction baseline. Materialized by
-  the committed ``corpus/pages.jsonl``. Bit-for-bit regression
-  detectable via ``git diff``.
+- **REQ-CORPUS-04** — Persisted extraction baseline, SHA256 gelé au
+  manifest. Materialized by the committed ``corpus/pages.jsonl`` and
+  its declared hash under ``derived_artifacts.pages_jsonl.sha256``.
+  Bit-for-bit regression — including text-only drift — detected by
+  ``test_baseline_hash_matches_manifest`` (machine-enforced) and
+  by ``git diff`` (human-readable).
 
 Exit codes
 ----------
