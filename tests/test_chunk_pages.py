@@ -23,11 +23,14 @@ from pathlib import Path
 import pytest
 import yaml
 
+import tiktoken
+
 from chunk_pages import (
     MAX_TOKENS,
     OVERLAP_TOKENS,
     SEPARATORS,
     TARGET_TOKENS,
+    TOKENIZER_NAME,
     Chunk,
     ChunkError,
     ChunkReport,
@@ -480,67 +483,118 @@ def test_chunk_all_raises_on_missing_required_key(tmp_path):
 
 
 # ---------------------------------------------------------------------
-# Baseline tests on the versioned corpus/pages.jsonl
+# Baseline tests on the versioned committed artifacts
+#
+# These tests verify invariants on the ARTIFACTS (`corpus/chunks.jsonl`
+# and `corpus/pages.jsonl`), not on ``chunk_page`` re-run in memory.
+# The distinction matters: a bug that regressed the chunker but left
+# the committed baseline intact must be caught here as an artifact
+# violation, not as a function-under-test regression. Cross-checking
+# the two committed files is what the VCD Brique 7 will do.
 # ---------------------------------------------------------------------
 
 
-def _load_baseline_pages() -> list[tuple[str, int, str]]:
+def _load_committed_pages_map() -> dict[tuple[str, int], str]:
+    """Load ``corpus/pages.jsonl`` into ``{(doc_id, page_num): text}``.
+
+    Returns ``{}`` and lets the caller ``pytest.skip`` when the file is
+    absent, so a fresh clone without the baseline still runs the unit
+    tests.
+    """
     if not PAGES_JSONL_PATH.exists():
-        pytest.skip(f"{PAGES_JSONL_PATH} missing — run extract_all.py")
-    pages = []
+        return {}
+    pages: dict[tuple[str, int], str] = {}
     with PAGES_JSONL_PATH.open("r", encoding="utf-8") as handle:
         for line in handle:
             rec = json.loads(line)
-            pages.append((rec["doc_id"], rec["page_num"], rec["text"]))
+            pages[(rec["doc_id"], rec["page_num"])] = rec["text"]
     return pages
 
 
-def test_baseline_every_chunk_under_max_tokens_on_real_corpus():
-    """REQ-CHUNK-01 verified end-to-end on the versioned baseline.
+def _iter_committed_chunks() -> list[dict]:
+    """Load ``corpus/chunks.jsonl`` into a list of dicts."""
+    if not CHUNKS_JSONL_PATH.exists():
+        return []
+    chunks: list[dict] = []
+    with CHUNKS_JSONL_PATH.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            chunks.append(json.loads(line))
+    return chunks
 
-    Any regression bringing a chunk above MAX_TOKENS (broken cascade,
-    tokenizer change without constant bump) surfaces here without
-    running the CLI.
+
+def test_committed_chunks_jsonl_every_chunk_under_max_tokens():
+    """REQ-CHUNK-01 verified on the ARTIFACT.
+
+    Loads every chunk from ``corpus/chunks.jsonl`` and asserts
+    ``token_count(chunk.text) <= MAX_TOKENS`` against the tokenizer
+    declared in the manifest. Fails if the committed file was
+    regenerated with wrong constants (someone bumped
+    ``TARGET_TOKENS`` past ``MAX_TOKENS``, or a future refactor
+    silently emitted an oversized chunk into the baseline).
     """
-    pages = _load_baseline_pages()
-    for doc_id, page_num, text in pages:
-        for chunk in chunk_page(text, doc_id, page_num):
-            n = _token_count(chunk.text)
-            assert n <= MAX_TOKENS, (
-                f"{doc_id} p.{page_num} chunk_idx={chunk.chunk_idx} "
-                f"exceeds MAX_TOKENS: {n} > {MAX_TOKENS}"
-            )
+    if not CHUNKS_JSONL_PATH.exists():
+        pytest.skip(f"{CHUNKS_JSONL_PATH} missing — run chunk_pages.py")
+    chunks = _iter_committed_chunks()
+    assert chunks, "chunks.jsonl exists but is empty"
+    for c in chunks:
+        n = _token_count(c["text"])
+        assert n <= MAX_TOKENS, (
+            f"{c['doc_id']} p.{c['page_num']} chunk_idx={c['chunk_idx']} "
+            f"in committed chunks.jsonl exceeds MAX_TOKENS: {n} > {MAX_TOKENS}"
+        )
 
 
-def test_baseline_strict_substring_invariant_on_real_corpus():
-    """REQ-CHUNK-02 verified end-to-end.
+def test_committed_chunks_jsonl_strict_substring_against_pages_jsonl():
+    """REQ-CHUNK-02 (a) verified on the ARTIFACT.
 
-    For every (doc, page, chunk) on the real corpus:
-    ``page.text[char_start:char_end] == chunk.text``.
+    For every chunk in ``corpus/chunks.jsonl``, cross-check that
+    ``pages[(doc_id, page_num)].text[char_start:char_end] == chunk.text``
+    where ``pages`` is loaded from the committed ``corpus/pages.jsonl``.
+
+    This is the VCD-level test: it exercises the citation contract
+    exactly the way a VCD Brique 7 consumer will — no pdfplumber, no
+    chunk_page re-run, only the two persisted evidence files.
     """
-    pages = _load_baseline_pages()
-    for doc_id, page_num, text in pages:
-        for chunk in chunk_page(text, doc_id, page_num):
-            assert text[chunk.char_start:chunk.char_end] == chunk.text, (
-                f"{doc_id} p.{page_num} chunk_idx={chunk.chunk_idx} "
-                f"strict-substring broken"
-            )
+    if not CHUNKS_JSONL_PATH.exists():
+        pytest.skip(f"{CHUNKS_JSONL_PATH} missing — run chunk_pages.py")
+    pages_map = _load_committed_pages_map()
+    if not pages_map:
+        pytest.skip(f"{PAGES_JSONL_PATH} missing — run extract_all.py")
+    for c in _iter_committed_chunks():
+        key = (c["doc_id"], c["page_num"])
+        assert key in pages_map, (
+            f"chunks.jsonl references {key} which is not in pages.jsonl"
+        )
+        source_text = pages_map[key]
+        cited = source_text[c["char_start"]:c["char_end"]]
+        assert cited == c["text"], (
+            f"{key} chunk_idx={c['chunk_idx']} strict-substring broken:\n"
+            f"  chunk.text[:60]={c['text'][:60]!r}\n"
+            f"  page[start:end][:60]={cited[:60]!r}"
+        )
 
 
-def test_baseline_no_chunk_crosses_page_boundary_on_real_corpus():
-    """REQ-CORPUS-02 chunk-side leg — *fully enforced*.
+def test_committed_chunks_jsonl_no_chunk_crosses_page_boundary():
+    """REQ-CORPUS-02 chunk-side leg — verified on the ARTIFACT.
 
-    ``(doc_id, page_num)`` on the chunk equals ``(doc_id, page_num)``
-    of exactly one source Page. Trivially true by construction of
-    ``chunk_page`` (called per-page), asserted here as a
-    machine-readable statement of the invariant.
+    Every ``(doc_id, page_num)`` on a chunk in ``corpus/chunks.jsonl``
+    must exist as a page in ``corpus/pages.jsonl``. Combined with the
+    strict-substring test above, this exhibits the chunk-side leg of
+    REQ-CORPUS-02 (``chunk.page_num ∈ [1, manifest.pages]``) on the
+    persisted artifacts without any function-under-test re-run.
     """
-    pages = _load_baseline_pages()
-    manifest_key = {(doc_id, page_num) for doc_id, page_num, _ in pages}
-    for doc_id, page_num, text in pages:
-        for chunk in chunk_page(text, doc_id, page_num):
-            assert (chunk.doc_id, chunk.page_num) == (doc_id, page_num)
-            assert (chunk.doc_id, chunk.page_num) in manifest_key
+    if not CHUNKS_JSONL_PATH.exists():
+        pytest.skip(f"{CHUNKS_JSONL_PATH} missing — run chunk_pages.py")
+    pages_map = _load_committed_pages_map()
+    if not pages_map:
+        pytest.skip(f"{PAGES_JSONL_PATH} missing")
+    pages_keys = set(pages_map)
+    for c in _iter_committed_chunks():
+        key = (c["doc_id"], c["page_num"])
+        assert key in pages_keys, (
+            f"chunks.jsonl line references orphan page {key} — "
+            f"cross-page or drift"
+        )
 
 
 # ---------------------------------------------------------------------
@@ -604,3 +658,66 @@ def test_chunks_baseline_bytes_matches_manifest():
     declared = manifest["derived_artifacts"]["chunks_jsonl"]["bytes"]
     actual = CHUNKS_JSONL_PATH.stat().st_size
     assert actual == declared
+
+
+def test_manifest_producer_env_matches_module_constants():
+    """Machine-enforced consistency between manifest declarations and
+    the runtime constants that actually produced ``chunks.jsonl``.
+
+    Locks the class of silent-drift bug where a chunker constant is
+    bumped in ``chunk_pages.py`` but the manifest's ``producer_env``
+    still declares the old value — the SHA256 test alone would only
+    catch the drift AFTER someone regenerated ``chunks.jsonl``, whereas
+    this test surfaces the mismatch BEFORE any regeneration and forces
+    the two to move together in the same PR.
+
+    Also locks ``tiktoken.__version__`` against the manifest's
+    declared version, so an environment where a different tiktoken is
+    installed than the one declared cannot silently produce a matching
+    SHA256 (which is possible: cl100k merges are downloaded, not
+    embedded in the wheel).
+    """
+    manifest = yaml.safe_load(MANIFEST_PATH.read_text(encoding="utf-8"))
+    env = manifest["derived_artifacts"]["chunks_jsonl"]["producer_env"]
+    assert env["tiktoken"] == tiktoken.__version__, (
+        f"manifest declares tiktoken={env['tiktoken']!r} but runtime is "
+        f"{tiktoken.__version__!r} — pin your venv or bump the manifest."
+    )
+    assert env["tokenizer"] == TOKENIZER_NAME
+    assert env["target_tokens"] == TARGET_TOKENS
+    assert env["max_tokens"] == MAX_TOKENS
+    assert env["overlap_tokens"] == OVERLAP_TOKENS
+
+
+def test_merge_overlap_degrades_to_zero_on_adjacent_oversized_atoms():
+    """Documented limit: two adjacent atoms each above ``TARGET_TOKENS``
+    produce back-to-back chunks with zero shared text.
+
+    Rationale for accepting this as a limit rather than fixing it is
+    in the docstring of :func:`_merge_atoms_to_chunks`. This test
+    freezes the behavior so a future change (either a fix or a
+    further degradation) is caught explicitly.
+    """
+    # Build a fixture where two atoms are each in (TARGET_TOKENS, MAX_TOKENS].
+    # Varied words + digits so cl100k BPE does not collapse repetition.
+    seg = " ".join(f"mot{i}" for i in range(400))
+    tok = _token_count(seg)
+    assert TARGET_TOKENS < tok <= MAX_TOKENS, (
+        f"fixture drift: seg is {tok} tokens, expected in "
+        f"({TARGET_TOKENS}, {MAX_TOKENS}]"
+    )
+    text = seg + " " + seg
+    atoms = [(0, len(seg)), (len(seg) + 1, len(text))]
+    windows = _merge_atoms_to_chunks(text, atoms)
+    assert len(windows) == 2, (
+        f"expected 2 chunks for 2 oversized atoms, got {len(windows)}"
+    )
+    shared_chars = windows[0][1] - windows[1][0]
+    # Allow up to 1 char of "overlap" for the separator space at the
+    # atom boundary; the essential property is that no real content is
+    # shared between the two chunks.
+    assert shared_chars <= 1, (
+        f"expected 0-char overlap on adjacent oversized atoms, got "
+        f"{shared_chars} chars — either the documented limit was "
+        f"lifted (fix confirmed) or the fixture regressed."
+    )

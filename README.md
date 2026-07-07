@@ -138,7 +138,10 @@ and emits `corpus/chunks.jsonl` under a stable, documented contract:
 - **Recursive character splitter** with cascade
   `["\n\n","\n",". "," ",""]`, ~120 lines of pure Python, zero
   external dependency beyond `tiktoken`. LangChain-equivalent
-  semantics, auditable end-to-end.
+  semantics, deliberately not LangChain: chosen for VCD auditability
+  — a defense reviewer reads the whole splitter end-to-end in
+  minutes, versus multiple layers of a third-party package that
+  evolves independently on its own release cycle.
 - **Tokenizer = `cl100k_base` (tiktoken)** — deliberate choice
   documented in the manifest's `producer_env`. Independent of the
   embedding model chosen for Brique 2 (mistral-embed, BGE-M3, …) so
@@ -158,6 +161,33 @@ and emits `corpus/chunks.jsonl` under a stable, documented contract:
   is often present in the chunk text itself, and a best-effort regex
   would be untested clutter. Deliberate scoping decision — added
   later if retrieval evaluation motivates it.
+
+### Known chunking limits (Brique 1)
+
+Two behaviors of the chunker are characterized here as documented
+limits — surfaced explicitly so Brique 2 (embedding + retrieval)
+can measure their impact and decide on a resolution:
+
+- **Micro-chunks on cover / section-header pages** — a handful of
+  chunks fall below 10 tokens (`"ANNEXES"`, `"BIBLIOGRAPHIE"`, and
+  similar mono-title pages that are extracted faithfully but are
+  semantically thin). Not a chunker bug — the source pages
+  genuinely contain nothing else. These are expected to score
+  artificially high on retrieval queries containing the exact
+  keyword and pollute top-K. Decision deferred to Brique 2: either a
+  `MIN_TOKENS_PER_CHUNK` fusion into the previous/next chunk, or an
+  indexing-time filter, depending on retrieval evaluation output.
+- **Overlap degrades to zero on adjacent oversized atoms** — when
+  two consecutive atoms are each above `TARGET_TOKENS`, the merger
+  emits them as separate chunks with no shared text between them.
+  The overlap policy targets the "one semantic unit bisected across
+  two chunks, complete in neither" failure mode, which cannot
+  happen when the unit itself is a full atom emitted alone (it is
+  complete in that chunk). Fixing this would require intra-atom
+  hard-split for the overlap tail — declined as disproportionate.
+  Frozen by
+  `test_merge_overlap_degrades_to_zero_on_adjacent_oversized_atoms`
+  so any future change is caught explicitly.
 
 The manifest-enrichment tool `enrich_manifest.py` is itself covered by
 IVVQ-style tests:

@@ -69,7 +69,10 @@ comme constante gravée.
   - `tests/test_extract_pdf.py::test_page_count_mismatch_is_catchable_as_corpus_error`
 - **Tests aval (chunk-side)** :
   - `tests/test_chunk_pages.py::test_chunk_page_propagates_doc_id_and_page_num_verbatim`
-  - `tests/test_chunk_pages.py::test_baseline_no_chunk_crosses_page_boundary_on_real_corpus`
+    (unit, propagation en mémoire)
+  - `tests/test_chunk_pages.py::test_committed_chunks_jsonl_no_chunk_crosses_page_boundary`
+    (**primaire**, sur l'artefact committé : chaque `(doc_id,page_num)`
+    de `chunks.jsonl` doit exister dans `pages.jsonl`)
 - **Test-sentinelle cas dégradé** : `tests/test_extract_pdf.py::test_extract_pages_hygiene_documented_limit_current_behavior`
   (fige la baseline 45/72 pages contaminées sur `guide-hygiene.pdf`)
 - **Exception** : `extract_pdf.PageCountMismatchError` — héritage
@@ -192,8 +195,10 @@ ET sur le corpus réel via
 - **Consommateur** : à venir (Brique 2 — embeddings)
 - **Tests amont** :
   - `tests/test_chunk_pages.py::test_chunk_page_every_chunk_stays_under_max_tokens`
+    (unit, inputs synthétiques)
   - `tests/test_chunk_pages.py::test_hard_split_produces_pieces_all_under_max_tokens`
-  - `tests/test_chunk_pages.py::test_baseline_every_chunk_under_max_tokens_on_real_corpus`
+  - `tests/test_chunk_pages.py::test_committed_chunks_jsonl_every_chunk_under_max_tokens`
+    (**primaire**, sur l'artefact committé)
 - **Exception** : `chunk_pages.ChunkTooLargeError` (hard-split n'a pas
   réussi à borner un piece — indiquerait une incohérence tokenizer,
   théoriquement inatteignable sur la cascade actuelle).
@@ -201,35 +206,58 @@ ET sur le corpus réel via
 ### `REQ-CHUNK-02` — Provenance immutable et strict-substring
 
 Chaque chunk porte `(doc_id, page_num, chunk_idx, char_start, char_end)`
-tel que `pages_jsonl_page.text[char_start:char_end] == chunk.text`
-exactement (strict substring, byte-for-byte, sans normalisation ni
-whitespace stripping caché). L'invariant permet à un consommateur du
-VCD (Brique 7) de vérifier une citation en rechargeant
-`corpus/pages.jsonl` — sans réouvrir de PDF, sans rejouer pdfplumber.
+tel qu'un consommateur du VCD (Brique 7) puisse vérifier une citation
+en rechargeant `corpus/pages.jsonl` — sans réouvrir de PDF, sans
+rejouer pdfplumber ni chunk_page.
 
-**Enforcement** — par construction dans `chunk_pages.chunk_page` :
+**Deux invariants distincts composent l'exigence** :
 
-1. Le splitter cascade (`_split_keeping_sep_left` + `_hard_split_by_tokens`)
-   ne produit que des offsets en coordonnées absolues de la source ; la
-   séparation est *glued-left* pour que la concaténation des atomes
-   couvre `text[start:end]` sans gap.
-2. Le merger (`_merge_atoms_to_chunks`) prend `chunk.char_start` du
-   premier atome et `chunk.char_end` du dernier — la fenêtre est un
-   intervalle contigu de l'input.
-3. `chunk_page` construit chaque `Chunk` avec
-   `text=page_text[char_start:char_end]` littéral.
+**(a) *Literal-substring*** — pour tout chunk émis,
+`page.text[chunk.char_start:chunk.char_end] == chunk.text` exactement,
+byte-for-byte, sans normalisation ni whitespace stripping.
 
-L'invariant est vérifié par machine sur le corpus réel — voir tests.
+Trivial par construction dans `chunk_page` (ligne où le `Chunk` est
+instancié) : `text=page_text[char_start:char_end]` littéral, aucune
+réécriture. **Un futur refactor qui reconstruirait `Chunk.text`
+autrement** (par exemple `"".join(text[s:e] for s,e in atoms)` pour
+tracer les atomes individuels) casserait cette égalité et devrait
+ajouter son propre garde — l'invariant ne survit pas au refactor sans
+vigilance explicite.
+
+**(b) *Atom contiguity*** — la liste d'atomes retournée par
+`_split_recursive` couvre `text[start:end]` sans gap :
+`text[start:end] == "".join(text[s:e] for (s,e) in atoms)`.
+
+C'est la **propriété load-bearing** de REQ-CHUNK-02. Sans elle,
+l'invariant (a) est vide de sens : un chunk vide `("", 0, 0)`
+satisferait `page.text[0:0] == ""`. La contiguité repose sur
+`_split_keeping_sep_left` (glued-left : le séparateur reste dans le
+morceau gauche) et `_hard_split_by_tokens` (binary search en espace
+caractères, jamais en espace tokens — pas de perte au *decode*).
+
+**Enforcement — vérifications séparées, testées séparément** :
+
+- (a) est vérifié sur l'ARTEFACT committé `corpus/chunks.jsonl` croisé
+  à `corpus/pages.jsonl` — pas sur `chunk_page` re-runné en mémoire :
+  `tests/test_chunk_pages.py::test_committed_chunks_jsonl_strict_substring_against_pages_jsonl`
+  reproduit exactement le protocole VCD.
+- (b) est vérifié sur des inputs unit :
+  `tests/test_chunk_pages.py::test_split_recursive_produces_contiguous_atoms`
+  et `test_hard_split_pieces_are_contiguous_and_cover_input`.
 
 **Statut** — *fully enforced*.
 
 - **Producteur** : `chunk_pages.chunk_page`
 - **Consommateur (VCD B7)** : à venir
-- **Tests amont** :
+- **Tests amont (invariant a — literal-substring sur artefact)** :
   - `tests/test_chunk_pages.py::test_chunk_page_char_offsets_are_strict_substrings_of_source`
-  - `tests/test_chunk_pages.py::test_baseline_strict_substring_invariant_on_real_corpus`
+    (unit, inputs synthétiques)
+  - `tests/test_chunk_pages.py::test_committed_chunks_jsonl_strict_substring_against_pages_jsonl`
+    (**primaire**, sur l'artefact committé, protocole VCD-shaped)
+- **Tests amont (invariant b — atom contiguity)** :
   - `tests/test_chunk_pages.py::test_split_recursive_produces_contiguous_atoms`
   - `tests/test_chunk_pages.py::test_hard_split_pieces_are_contiguous_and_cover_input`
+  - `tests/test_chunk_pages.py::test_split_keeping_sep_left_covers_input_contiguously`
 
 ### `REQ-CHUNK-03` — Baseline gelée du chunking (`chunks.jsonl`)
 
@@ -264,6 +292,11 @@ ordre, `ensure_ascii=False`, ordre : documents selon l'ordre de
   - `tests/test_chunk_pages.py::test_chunks_baseline_hash_matches_manifest` (**primaire**)
   - `tests/test_chunk_pages.py::test_chunks_baseline_uses_lf_line_endings_only`
   - `tests/test_chunk_pages.py::test_chunks_baseline_bytes_matches_manifest`
+- **Test-verrou producer_env vs constantes module** :
+  `tests/test_chunk_pages.py::test_manifest_producer_env_matches_module_constants`
+  — force manifest et code source à bouger ensemble (impossible de
+  bumper `TARGET_TOKENS` en oubliant le manifest, ou d'installer un
+  tiktoken qui ne matche pas la déclaration).
 - **Test de déterminisme** :
   `tests/test_chunk_pages.py::test_chunk_all_second_run_is_bit_for_bit_identical`
 

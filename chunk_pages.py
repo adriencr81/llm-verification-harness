@@ -74,10 +74,25 @@ Upstream requirements (see ``docs/REQUIREMENTS.md``)
   merger (never exceeds ``TARGET_TOKENS`` unless a single atom is
   already above it, in which case it emits alone and is still
   ``<= MAX_TOKENS``).
-- **REQ-CHUNK-02** — Provenance immutable and falsifiable. Every chunk
-  carries ``(doc_id, page_num, chunk_idx, char_start, char_end)`` such
-  that ``page.text[char_start:char_end] == chunk.text``, verifiable
-  without re-opening the PDF.
+- **REQ-CHUNK-02** — Provenance immutable and falsifiable. Two
+  distinct invariants compose:
+
+  * (a) *Literal-substring* — ``page.text[char_start:char_end] ==
+    chunk.text`` for every emitted chunk. Trivial by construction:
+    :func:`chunk_page` assigns ``Chunk.text = text[char_start:char_end]``
+    literally, no rewriting. A future refactor that reconstructs
+    ``Chunk.text`` differently (e.g. from atoms) would break this and
+    must add its own guard.
+  * (b) *Atom contiguity* — the atoms returned by :func:`_split_recursive`
+    tile ``text[start:end]`` with no gap. This is the load-bearing
+    property: without it, invariant (a) is meaningless (an empty chunk
+    would satisfy it). Contiguity rests on
+    :func:`_split_keeping_sep_left` (glued-left) and
+    :func:`_hard_split_by_tokens` (character-space binary search).
+
+  A VCD consumer at Brique 7 can verify (a) directly on
+  ``chunks.jsonl`` + ``pages.jsonl`` without touching a PDF. (b) is
+  verified in-repo by ``test_split_recursive_produces_contiguous_atoms``.
 
 Exit codes
 ----------
@@ -333,10 +348,10 @@ def _split_recursive(
     """
     if _token_count(text[start:end]) <= MAX_TOKENS:
         return [(start, end)]
-    if sep_idx >= len(SEPARATORS):
-        # Defensive — SEPARATORS ends with "" so we should have hit
-        # hard-split before running out. Kept for clarity.
-        return _hard_split_by_tokens(text, start, end)
+    assert sep_idx < len(SEPARATORS), (
+        "SEPARATORS lost its empty-string sentinel — the cascade "
+        "would never terminate. Restore it in the tuple."
+    )
     sep = SEPARATORS[sep_idx]
     if sep == "":
         return _hard_split_by_tokens(text, start, end)
@@ -369,8 +384,27 @@ def _merge_atoms_to_chunks(
     ``TARGET_TOKENS`` but under ``MAX_TOKENS``) is emitted alone, the
     overlap rewind could land back on the same atom, deadlocking the
     walk. When the computed next start ``<= current start``, we force
-    ``current + 1`` — the overlap contract is "best effort", not
-    "guaranteed to reach OVERLAP_TOKENS on every edge case".
+    ``current + 1``.
+
+    **Documented limit — overlap degrades to zero on adjacent oversized
+    atoms.** When two consecutive atoms are each above ``TARGET_TOKENS``
+    (i.e. each atom would emit its own single-atom chunk), the backward
+    rewind from atom ``j-1 = i`` cannot walk past ``i`` (loop condition
+    ``k > i`` is immediately false), so ``overlap == 0`` and
+    ``next_i = j``. The two chunks touch but do not share text. Fixing
+    this would require intra-atom hard-split for the overlap tail —
+    declined as disproportionate:
+
+    * (a) the case is rare: requires consecutive semantic units of
+      500+ tokens each, back-to-back, with no ``\\n\\n`` separator to
+      break them at the splitter cascade;
+    * (b) the bug the overlap policy targets — "one semantic unit
+      bisected across two chunks, complete in neither" — cannot
+      happen when the unit IS a full atom emitted alone; it is
+      complete in its own chunk.
+
+    Frozen as behavior by
+    ``test_merge_overlap_degrades_to_zero_on_adjacent_oversized_atoms``.
     """
     if not atoms:
         return []
