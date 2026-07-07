@@ -25,7 +25,8 @@ Built incrementally, one brique per week:
 
 - [x] Brique 0 — Project skeleton + first LLM call (observe non-determinism)
 - [ ] Brique 1 — Document ingestion, chunking, provenance tracking *(in progress
-      — corpus contract + PDF extraction shipped; chunking next)*
+      — corpus contract + PDF extraction + persisted extraction baseline
+      shipped; chunking next)*
 - [ ] Brique 2 — Embeddings and semantic retrieval (cosine similarity)
 - [ ] Brique 3 — Full RAG pipeline (question → retrieve → generate)
 - [ ] Brique 4 — OWASP LLM01 (indirect prompt injection) test
@@ -59,13 +60,51 @@ enforcement status — the README does not conflate "declared" with
   `download_corpus.verify_document`. Violations surfaced as
   `CorpusSizeError`.
 - **`REQ-CORPUS-02` — Page-count invariant** *(enforced upstream at
-  extraction; chunk consumer pending)*. Chunk provenance
-  `(doc_id, page=N)` must satisfy `N ≤ pages(doc)`. The `pages` field is
-  frozen in the manifest by `enrich_manifest.py`;
+  extraction AND persisted at rest; chunk consumer pending)*. Chunk
+  provenance `(doc_id, page=N)` must satisfy `N ≤ pages(doc)`. The
+  `pages` field is frozen in the manifest by `enrich_manifest.py`;
   `extract_pdf.extract_doc` refuses to emit Pages whose count diverges
-  from the manifest (`PageCountMismatchError`). The chunking step will
-  inherit the invariant transitively — `chunk.page_num == page.page_num`
-  by construction, no PDF re-open.
+  from the manifest (`PageCountMismatchError`); the per-doc page count
+  in `corpus/pages.jsonl` is also asserted against the manifest by
+  `test_baseline_page_count_per_doc_matches_manifest`. The chunking
+  step will inherit the invariant transitively — `chunk.page_num ==
+  page.page_num` by construction, no PDF re-open.
+- **`REQ-CORPUS-04` — Persisted extraction baseline, SHA256-locked**
+  *(enforced)*. PDF→text extraction is committed to
+  [`corpus/pages.jsonl`](corpus/pages.jsonl) — one JSON record per
+  page, in manifest order, 1-indexed — and its SHA256 is frozen in
+  [`corpus/manifest.yaml`](corpus/manifest.yaml) under
+  `derived_artifacts.pages_jsonl.sha256`. Symmetric to
+  `REQ-CORPUS-01` on the source PDFs: silent extractor drift
+  (including *text-only* drift that leaves counts and ordering
+  intact) fails `test_baseline_hash_matches_manifest` at CI level,
+  without depending on a human running `git diff`. LF line endings
+  pinned across platforms by `.gitattributes`. Producer:
+  `extract_all.extract_all`, under the `pdfplumber` version declared
+  in `derived_artifacts.pages_jsonl.producer_env`.
+
+### Known extraction quality (Brique 1)
+
+The persisted baseline is a raw pdfplumber output — no post-processing
+beyond the repetition-based header/footer strip described in
+[`extract_pdf.py`](extract_pdf.py). Two known-noise patterns survive
+in `corpus/pages.jsonl` today:
+
+- **Cover pages** — several ANSSI guides render their title with a
+  custom vertical layout that pdfplumber extracts one glyph per line
+  (`"A\nN\nS\nS\nI\n..."`). Affects the first 1–2 pages of ~half the
+  corpus. Fragmented but not lost.
+- **`guide-hygiene.pdf`** — geometric layout with a single Y-bucket
+  per page defeats the repetition-based header/footer stripper on
+  its first pages. Documented as a `_strip_noise` limit in
+  [`extract_pdf.py`](extract_pdf.py); frozen as a sentinel test
+  (`test_extract_pages_hygiene_documented_limit_current_behavior`).
+
+These are consequences of the current extractor's design trade-offs,
+not silent failures — they are characterized here so the retrieval
+evaluation in Brique 2 can measure their impact on chunk quality
+before deciding whether a targeted regex pass or an OCR fallback is
+worth adding.
 
 The manifest-enrichment tool `enrich_manifest.py` is itself covered by
 IVVQ-style tests:
@@ -83,10 +122,13 @@ non-regression sentinel.
 
 Brique 0 complete. Brique 1 in progress — corpus contract foundation
 delivered (REQ-CORPUS-01 enforced, REQ-CORPUS-03 enforced opt-in,
-REQ-CORPUS-02 enforced upstream at extraction). `doc_id` baseline test
-in place. PDF extraction via `pdfplumber` shipped with
-repetition-based header/footer stripping. Remaining before Brique 1
-closes: chunking with attached provenance, `chunks.json` deliverable.
+REQ-CORPUS-02 enforced upstream at extraction and persisted at rest,
+REQ-CORPUS-04 enforced). `doc_id` baseline test in place. PDF
+extraction via `pdfplumber` shipped with repetition-based header/footer
+stripping; extracted pages persisted to
+[`corpus/pages.jsonl`](corpus/pages.jsonl) (833 pages across 11 docs,
+committed as an auditable baseline). Remaining before Brique 1 closes:
+chunking with attached provenance, `chunks.jsonl` deliverable.
 
 ## Stack
 
@@ -114,10 +156,23 @@ document (idempotent — no-op if all entries already carry both fields):
 python enrich_manifest.py
 ```
 
-Extract a PDF into logical Pages (1-indexed, header/footer stripped by
+Extract the full corpus to `corpus/pages.jsonl` (deterministic,
+manifest-ordered, 1-indexed pages, header/footer stripped by
 **repetition** rather than geometry — see design rationale in
 `extract_pdf.py` module docstring — page count checked against
-manifest per REQ-CORPUS-02):
+manifest per REQ-CORPUS-02, persisted at rest per REQ-CORPUS-04):
+
+```
+python extract_all.py
+```
+
+The output file is versioned; a fresh clone inherits the committed
+baseline without re-running pdfplumber. Regenerate only when
+[`corpus/manifest.yaml`](corpus/manifest.yaml) or the extractor
+changes — the `git diff` on `pages.jsonl` is then the audit
+artefact.
+
+To extract a single document programmatically:
 
 ```python
 from pathlib import Path

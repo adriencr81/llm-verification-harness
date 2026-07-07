@@ -1,0 +1,15 @@
+# Pin line endings to LF across platforms.
+#
+# Rationale — the bit-for-bit contract on derived baselines
+# (`corpus/pages.jsonl` and, upcoming, `corpus/chunks.jsonl`) is
+# broken on Windows re-clone with `core.autocrlf=true` (default on Git
+# for Windows): checkout would rewrite LF → CRLF, and the next
+# `python extract_all.py` run would diff every line. Materializes
+# `REQ-CORPUS-04` on any platform.
+
+* text=auto eol=lf
+
+# Explicit binary opt-out for the source PDFs — they must not be
+# subject to any newline translation. (They are git-ignored today; the
+# rule is defensive against a future decision to track them.)
+*.pdf binary

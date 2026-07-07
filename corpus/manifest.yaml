@@ -33,6 +33,27 @@ schema_version: 1
 license: "Licence Ouverte 2.0 (Etalab)"
 source_authority: ANSSI
 
+# Baselines dérivées du corpus (produites par le pipeline, versionnées
+# comme evidence V&V). Chaque entrée porte un SHA256 gelé — même
+# contrat que `documents[].sha256` sur les PDFs, mais côté artefacts
+# aval. Une divergence entre le fichier sur disque et le hash déclaré
+# ici est refusée par le test correspondant, sans dépendre d'un `git
+# diff` réalisé par un humain.
+#
+# `pages_jsonl` — sortie de `extract_all.py`, source unique du chunker.
+#   Producteur   : extract_all.extract_all
+#   Fichier      : corpus/pages.jsonl
+#   Contrat      : SHA256 bit-for-bit (matérialise REQ-CORPUS-04)
+#   Producer env : pdfplumber pinné dans requirements.txt (drift = régen)
+derived_artifacts:
+  pages_jsonl:
+    path: corpus/pages.jsonl
+    sha256: d5af4dfe1bacefa3a7ba30be9b96b040efe233cbb5869a7b1f10e148149cc544
+    bytes: 1708721
+    producer: extract_all.py
+    producer_env:
+      pdfplumber: "0.11.10"
+
 documents:
   - doc_id: active-directory
     filename: reco-active-directory.pdf
