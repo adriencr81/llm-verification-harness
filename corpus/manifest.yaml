@@ -45,6 +45,13 @@ source_authority: ANSSI
 #   Fichier      : corpus/pages.jsonl
 #   Contrat      : SHA256 bit-for-bit (matérialise REQ-CORPUS-04)
 #   Producer env : pdfplumber pinné dans requirements.txt (drift = régen)
+#
+# `chunks_jsonl` — sortie de `chunk_pages.py`, source unique de la
+#   Brique 2 (embeddings). Chaque chunk porte la provenance
+#   `(doc_id, page_num, char_start, char_end)` qui satisfait par
+#   construction REQ-CORPUS-02 (chunk-side) et REQ-CHUNK-02
+#   (strict-substring). Tokenizer figé au producer_env — un swap
+#   déplace le SHA256 délibérément.
 derived_artifacts:
   pages_jsonl:
     path: corpus/pages.jsonl
@@ -53,6 +60,17 @@ derived_artifacts:
     producer: extract_all.py
     producer_env:
       pdfplumber: "0.11.10"
+  chunks_jsonl:
+    path: corpus/chunks.jsonl
+    sha256: 89f045250000f90972b4eedc16082c48acbf6f310ed9032e7b497e38c6d40870
+    bytes: 1909372
+    producer: chunk_pages.py
+    producer_env:
+      tiktoken: "0.13.0"
+      tokenizer: cl100k_base
+      target_tokens: 500
+      max_tokens: 800
+      overlap_tokens: 75
 
 documents:
   - doc_id: active-directory
