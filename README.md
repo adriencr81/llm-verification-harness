@@ -24,9 +24,9 @@ This project transposes that formalism to RAG/LLM systems.
 Built incrementally, one brique per week:
 
 - [x] Brique 0 — Project skeleton + first LLM call (observe non-determinism)
-- [ ] Brique 1 — Document ingestion, chunking, provenance tracking *(in progress
-      — corpus contract + PDF extraction + persisted extraction baseline
-      shipped; chunking next)*
+- [x] Brique 1 — Document ingestion, chunking, provenance tracking *(corpus
+      contract, PDF extraction, persisted extraction & chunking baselines
+      all shipped and SHA256-locked)*
 - [ ] Brique 2 — Embeddings and semantic retrieval (cosine similarity)
 - [ ] Brique 3 — Full RAG pipeline (question → retrieve → generate)
 - [ ] Brique 4 — OWASP LLM01 (indirect prompt injection) test
@@ -36,7 +36,7 @@ Built incrementally, one brique per week:
 - [ ] Brique 8 — Catalog (OWASP/ATLAS), unit tests, CI, polished README
 - [ ] Brique 9 — Hardening loop (detect → fix → re-verify on injection)
 
-## Corpus contract (Brique 1 — in progress)
+## Corpus contract (Brique 1)
 
 The corpus is 11 ANSSI cybersecurity guides, versioned in
 [`corpus/manifest.yaml`](corpus/manifest.yaml) as a **hash-locked contract**
@@ -59,16 +59,16 @@ enforcement status — the README does not conflate "declared" with
   truncation — never a substitute for SHA256. Consumer:
   `download_corpus.verify_document`. Violations surfaced as
   `CorpusSizeError`.
-- **`REQ-CORPUS-02` — Page-count invariant** *(enforced upstream at
-  extraction AND persisted at rest; chunk consumer pending)*. Chunk
-  provenance `(doc_id, page=N)` must satisfy `N ≤ pages(doc)`. The
-  `pages` field is frozen in the manifest by `enrich_manifest.py`;
-  `extract_pdf.extract_doc` refuses to emit Pages whose count diverges
-  from the manifest (`PageCountMismatchError`); the per-doc page count
-  in `corpus/pages.jsonl` is also asserted against the manifest by
-  `test_baseline_page_count_per_doc_matches_manifest`. The chunking
-  step will inherit the invariant transitively — `chunk.page_num ==
-  page.page_num` by construction, no PDF re-open.
+- **`REQ-CORPUS-02` — Page-count invariant** *(fully enforced)*. Chunk
+  provenance `(doc_id, page=N)` must satisfy `N ≤ pages(doc)`. Three
+  composed enforcements: `pages` frozen in the manifest by
+  `enrich_manifest.py`; `extract_pdf.extract_doc` refuses to emit
+  Pages whose count diverges from the manifest
+  (`PageCountMismatchError`); per-doc page count in
+  `corpus/pages.jsonl` asserted against the manifest at CI level;
+  `chunk_pages.chunk_page` copies `page_num` verbatim from a
+  contract-verified Page — never re-opens a PDF — so
+  `chunk.page_num ∈ [1, manifest.pages]` holds by construction.
 - **`REQ-CORPUS-04` — Persisted extraction baseline, SHA256-locked**
   *(enforced)*. PDF→text extraction is committed to
   [`corpus/pages.jsonl`](corpus/pages.jsonl) — one JSON record per
@@ -82,6 +82,29 @@ enforcement status — the README does not conflate "declared" with
   pinned across platforms by `.gitattributes`. Producer:
   `extract_all.extract_all`, under the `pdfplumber` version declared
   in `derived_artifacts.pages_jsonl.producer_env`.
+- **`REQ-CHUNK-01` — Chunk size bounded** *(fully enforced)*. Every
+  emitted chunk satisfies `token_count(chunk.text, cl100k_base) ≤ 800`.
+  Enforced by the recursive character splitter (cascade
+  `["\n\n","\n",". "," ",""]`) with a binary-search token-level
+  fallback. Consumer: `chunk_pages.chunk_page`. Verified end-to-end
+  on the versioned baseline via
+  `test_baseline_every_chunk_under_max_tokens_on_real_corpus`.
+- **`REQ-CHUNK-02` — Provenance strict-substring** *(fully enforced)*.
+  Every chunk carries `(doc_id, page_num, chunk_idx, char_start,
+  char_end)` such that `page.text[char_start:char_end] == chunk.text`
+  exactly — no whitespace normalization, no rewriting. This is the
+  falsifiability anchor that lets the VCD (Brique 7) verify a
+  citation without touching a PDF. Verified on the versioned baseline
+  via `test_baseline_strict_substring_invariant_on_real_corpus`.
+- **`REQ-CHUNK-03` — Persisted chunking baseline, SHA256-locked**
+  *(enforced)*. Chunker output committed to
+  [`corpus/chunks.jsonl`](corpus/chunks.jsonl) (1239 chunks across
+  833 pages / 11 docs). SHA256 frozen at
+  `derived_artifacts.chunks_jsonl.sha256`, tokenizer and constants
+  (`target_tokens=500`, `max_tokens=800`, `overlap_tokens=75`) pinned
+  under `producer_env`. Any swap of tokenizer or constants moves the
+  SHA256 deliberately. Producer: `chunk_pages.chunk_all`. Detection
+  primaire via `test_chunks_baseline_hash_matches_manifest`.
 
 ### Known extraction quality (Brique 1)
 
@@ -106,6 +129,66 @@ evaluation in Brique 2 can measure their impact on chunk quality
 before deciding whether a targeted regex pass or an OCR fallback is
 worth adding.
 
+### Chunking contract (Brique 1)
+
+The chunker in [`chunk_pages.py`](chunk_pages.py) reads
+[`corpus/pages.jsonl`](corpus/pages.jsonl) — never re-opens a PDF —
+and emits `corpus/chunks.jsonl` under a stable, documented contract:
+
+- **Recursive character splitter** with cascade
+  `["\n\n","\n",". "," ",""]`, ~120 lines of pure Python, zero
+  external dependency beyond `tiktoken`. LangChain-equivalent
+  semantics, deliberately not LangChain: chosen for VCD auditability
+  — a defense reviewer reads the whole splitter end-to-end in
+  minutes, versus multiple layers of a third-party package that
+  evolves independently on its own release cycle.
+- **Tokenizer = `cl100k_base` (tiktoken)** — deliberate choice
+  documented in the manifest's `producer_env`. Independent of the
+  embedding model chosen for Brique 2 (mistral-embed, BGE-M3, …) so
+  the chunk boundary does not have to move every time B2 iterates.
+  Swappable via a future `--tokenizer` flag if B4 evaluation reveals
+  a material retrieval bias.
+- **Bounded chunks** — target 500 tokens, hard ceiling 800.
+- **Overlap ~15% (75 tokens)** — insurance against the classic RAG
+  bug where a semantic unit (an ANSSI recommendation) is bisected
+  between two chunks and appears complete in neither. Intra-page
+  only.
+- **No cross-page chunks** — `chunk_page` is called per-page;
+  overlap and split operate exclusively on a single page's text.
+- **Provenance minimale, falsifiable** — `(doc_id, page_num,
+  chunk_idx, char_start, char_end)` on every chunk. No structured
+  section detection (no `R7`-style hierarchical anchor): the section
+  is often present in the chunk text itself, and a best-effort regex
+  would be untested clutter. Deliberate scoping decision — added
+  later if retrieval evaluation motivates it.
+
+### Known chunking limits (Brique 1)
+
+Two behaviors of the chunker are characterized here as documented
+limits — surfaced explicitly so Brique 2 (embedding + retrieval)
+can measure their impact and decide on a resolution:
+
+- **Micro-chunks on cover / section-header pages** — a handful of
+  chunks fall below 10 tokens (`"ANNEXES"`, `"BIBLIOGRAPHIE"`, and
+  similar mono-title pages that are extracted faithfully but are
+  semantically thin). Not a chunker bug — the source pages
+  genuinely contain nothing else. These are expected to score
+  artificially high on retrieval queries containing the exact
+  keyword and pollute top-K. Decision deferred to Brique 2: either a
+  `MIN_TOKENS_PER_CHUNK` fusion into the previous/next chunk, or an
+  indexing-time filter, depending on retrieval evaluation output.
+- **Overlap degrades to zero on adjacent oversized atoms** — when
+  two consecutive atoms are each above `TARGET_TOKENS`, the merger
+  emits them as separate chunks with no shared text between them.
+  The overlap policy targets the "one semantic unit bisected across
+  two chunks, complete in neither" failure mode, which cannot
+  happen when the unit itself is a full atom emitted alone (it is
+  complete in that chunk). Fixing this would require intra-atom
+  hard-split for the overlap tail — declined as disproportionate.
+  Frozen by
+  `test_merge_overlap_degrades_to_zero_on_adjacent_oversized_atoms`
+  so any future change is caught explicitly.
+
 The manifest-enrichment tool `enrich_manifest.py` is itself covered by
 IVVQ-style tests:
 **bit-for-bit idempotence** (a 2nd run must not touch the file), **atomic
@@ -120,15 +203,15 @@ non-regression sentinel.
 
 ## Status
 
-Brique 0 complete. Brique 1 in progress — corpus contract foundation
-delivered (REQ-CORPUS-01 enforced, REQ-CORPUS-03 enforced opt-in,
-REQ-CORPUS-02 enforced upstream at extraction and persisted at rest,
-REQ-CORPUS-04 enforced). `doc_id` baseline test in place. PDF
-extraction via `pdfplumber` shipped with repetition-based header/footer
-stripping; extracted pages persisted to
-[`corpus/pages.jsonl`](corpus/pages.jsonl) (833 pages across 11 docs,
-committed as an auditable baseline). Remaining before Brique 1 closes:
-chunking with attached provenance, `chunks.jsonl` deliverable.
+Brique 0 complete. **Brique 1 complete** — corpus contract, PDF
+extraction, and chunking all shipped under IVVQ discipline:
+REQ-CORPUS-01/03 enforced, REQ-CORPUS-02 fully enforced (extraction
++ persistence + chunk boundary), REQ-CORPUS-04 enforced,
+REQ-CHUNK-01/02/03 enforced. Two persisted baselines committed and
+SHA256-locked: [`corpus/pages.jsonl`](corpus/pages.jsonl) (833 pages
+across 11 ANSSI guides) and [`corpus/chunks.jsonl`](corpus/chunks.jsonl)
+(1239 chunks with strict-substring provenance into pages.jsonl).
+Brique 2 (embeddings) consumes `chunks.jsonl` next.
 
 ## Stack
 
@@ -166,20 +249,33 @@ manifest per REQ-CORPUS-02, persisted at rest per REQ-CORPUS-04):
 python extract_all.py
 ```
 
-The output file is versioned; a fresh clone inherits the committed
-baseline without re-running pdfplumber. Regenerate only when
-[`corpus/manifest.yaml`](corpus/manifest.yaml) or the extractor
-changes — the `git diff` on `pages.jsonl` is then the audit
-artefact.
+Chunk the extracted pages to `corpus/chunks.jsonl` (recursive
+character splitter, `cl100k_base` tokenizer, 500-token target with
+75-token overlap, strict-substring provenance per REQ-CHUNK-02,
+SHA256-locked per REQ-CHUNK-03):
 
-To extract a single document programmatically:
+```
+python chunk_pages.py
+```
+
+Both output files are versioned; a fresh clone inherits the
+committed baselines without re-running pdfplumber or the chunker.
+Regenerate only when [`corpus/manifest.yaml`](corpus/manifest.yaml),
+the extractor, or the chunker changes — the `git diff` on
+`pages.jsonl` / `chunks.jsonl` is then the audit artefact, and the
+SHA256 in the manifest must be bumped in the same PR (deliberate
+gesture, not an accident).
+
+To extract or chunk programmatically:
 
 ```python
 from pathlib import Path
 from extract_pdf import extract_doc, load_manifest
+from chunk_pages import chunk_page
 
 manifest = load_manifest(Path("corpus/manifest.yaml"))
 pages = extract_doc(manifest, "ebios-rm", Path("corpus/pdfs"))
+chunks = chunk_page(pages[0].text, pages[0].doc_id, pages[0].page_num)
 ```
 
 Run the test suite:
