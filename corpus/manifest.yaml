@@ -72,6 +72,46 @@ derived_artifacts:
       max_tokens: 800
       overlap_tokens: 75
 
+  # `embeddings_npy` — sortie de `build_embeddings.py`, source unique de
+  # la Brique 3 (génération RAG) et du banc B5+.
+  #
+  # **Posture produit (2026-07-10)** : contrairement à pages.jsonl /
+  # chunks.jsonl, un embedding neural n'est PAS reproductible bit-à-bit
+  # cross-machine (BLAS/MKL, ordre des sommes flottantes). Figer le
+  # SHA256 comme régression bloquante = faux contrat. On documente le
+  # hash pour traçabilité, on teste les **propriétés vérifiables**
+  # (REQ-EMBED-02) : dim=1024, dtype=float32, ‖v‖₂ ≈ 1 (tol 1e-5),
+  # shape[0] == len(embeddings_index.jsonl), schema et ordre préservés.
+  embeddings_npy:
+    path: corpus/embeddings.npy
+    sha256: 296844236311ea9781d3b0f40a277191655d306411a5a48c7609442bd6a386c8   # informatif, non bloquant
+    bytes: 5042304
+    producer: build_embeddings.py
+    producer_env:
+      sentence_transformers: "5.6.0"
+      torch: "2.13.0"
+      transformers: "5.13.0"
+      huggingface_hub: "1.23.0"
+      numpy: "2.5.1"
+      model: BAAI/bge-m3
+      revision: 5617a9f61b028005a4858fdac845db406aefb181
+      device: cpu
+      normalize_embeddings: true
+      dtype: float32
+      dim: 1024
+      batch_size: 32
+      min_tokens_filter: 10   # REQ-CHUNK-04
+
+  # Mirror row-aligné de la matrice — schéma identique à chunks.jsonl,
+  # filtré par REQ-CHUNK-04 (micro-chunks < 10 tokens exclus de l'index
+  # mais préservés dans chunks.jsonl pour audit).
+  embeddings_index_jsonl:
+    path: corpus/embeddings_index.jsonl
+    sha256: 9ceb99e1d8487dfb7008b40c11b812d8e14787c64263ba3fb80f1ed49d6ac1a8   # informatif
+    bytes: 1908428
+    producer: build_embeddings.py
+    schema: chunks.jsonl
+
 documents:
   - doc_id: active-directory
     filename: reco-active-directory.pdf

@@ -27,7 +27,9 @@ Built incrementally, one brique per week:
 - [x] Brique 1 — Document ingestion, chunking, provenance tracking *(corpus
       contract, PDF extraction, persisted extraction & chunking baselines
       all shipped and SHA256-locked)*
-- [ ] Brique 2 — Embeddings and semantic retrieval (cosine similarity)
+- [x] Brique 2 — Embeddings and semantic retrieval *(BGE-M3 CPU-only,
+      L2-normalized, dot-product cosine retrieval, matrix + row-aligned
+      index both committed)*
 - [ ] Brique 3 — Full RAG pipeline (question → retrieve → generate)
 - [ ] Brique 4 — OWASP LLM01 (indirect prompt injection) test
 - [ ] Brique 5 — IVVQ-style test case formalization (YAML runner)
@@ -196,6 +198,66 @@ write** (a missing PDF must leave the manifest untouched), unique-SHA256
 precondition, header-comment preservation, and a matcher regex
 non-regression sentinel.
 
+## Embeddings & retrieval (Brique 2)
+
+Chunks are vectorized with **`BAAI/bge-m3`** — SOTA MTEB-FR at the time
+of writing, 1024-dim, 8192-token context, natively L2-normalized. The
+choice is deliberate over a mini-bench: the rigorous IVVQ evaluation
+lands in Brique 7 on the RAG's *answers*, not on embeddings — a
+recruiter reads a 3-line justification, not a spreadsheet of MRR@k.
+
+The vectorization pipeline is deliberately minimal:
+
+- **CPU-only**, `float32`, `normalize_embeddings=True` — cosine
+  similarity reduces to a plain `matrix @ query`.
+- **No vector database.** With ~1200 chunks × 1024 dims (~5 MB matrix),
+  `np.argpartition` returns top-k in <10 ms. FAISS/Chroma would add an
+  opaque binary artifact for zero measurable benefit. Deliberate
+  scoping decision — added the day the corpus outgrows brute force.
+- **Two committed artifacts**, row-aligned:
+  [`corpus/embeddings.npy`](corpus/embeddings.npy) (float32 matrix) and
+  [`corpus/embeddings_index.jsonl`](corpus/embeddings_index.jsonl)
+  (metadata mirror of the indexed chunks, same schema as
+  `chunks.jsonl`).
+
+### Contract by properties, not bit-for-bit SHA256
+
+Unlike `pages.jsonl` / `chunks.jsonl` (algorithmic, bit-reproducible),
+a neural embedding is **not** reproducible bit-for-bit across machines
+— BLAS/MKL versions, floating-point sum order on CPU/GPU. Locking the
+SHA256 as a blocking regression would be a *faux contrat* that would
+fail on the first OS switch. Documented senior IVVQ choice: **we
+freeze what is freezable**. The manifest records the hash for
+traceability; the tests verify **properties** (`REQ-EMBED-02`):
+
+- `matrix.ndim == 2`, `matrix.shape[1] == 1024`, `dtype == float32`
+- `∀i, |‖matrix[i]‖₂ − 1| < 1e-5` — the L2 contract that lets
+  `matrix @ query` behave as cosine similarity
+- `matrix.shape[0] == len(embeddings_index.jsonl)` — row-alignment
+- `embeddings_index.jsonl` is an ordered subset of `chunks.jsonl`
+  (REQ-CHUNK-04 filter applied)
+
+Four requirements are catalogued in
+[`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md):
+
+- **`REQ-CHUNK-04` — Micro-chunk indexation filter** *(enforced)*.
+  Chunks with `token_count(text) < 10` are excluded from the index but
+  kept in `chunks.jsonl` for audit. Filter lives at the retriever
+  boundary, not upstream in the chunker (chunker stays faithful to the
+  source; retriever makes the pragmatic call — clean separation).
+- **`REQ-EMBED-01` — Model pinned in `producer_env`** *(enforced)*.
+  `model`, `revision`, `sentence-transformers`, `torch`, `transformers`,
+  `huggingface_hub`, `numpy`, `device`, `normalize_embeddings`, `dtype`,
+  `dim`, `batch_size`, `min_tokens_filter` all declared in
+  `derived_artifacts.embeddings_npy.producer_env`.
+- **`REQ-EMBED-02` — Properties-verified baseline** *(enforced)*. See
+  contract-by-properties block above. Primary test:
+  `test_committed_embeddings_are_l2_normalized`.
+- **`REQ-RETRIEVE-01` — `retrieve(question, k=4) → list[RetrievalResult]`**
+  *(enforced)*. Sorted by descending raw cosine score in `[-1, 1]`
+  (not rescaled — the sign carries information downstream stages need).
+  No threshold, no rerank: the retriever is a sort, not a filter.
+
 > The corpus rationale documents (`corpus/README.md`, `docs/REQUIREMENTS.md`)
 > and the code docstrings are in French: target market is French
 > defense/aerospace. The root README stays in English as an international
@@ -203,15 +265,16 @@ non-regression sentinel.
 
 ## Status
 
-Brique 0 complete. **Brique 1 complete** — corpus contract, PDF
-extraction, and chunking all shipped under IVVQ discipline:
-REQ-CORPUS-01/03 enforced, REQ-CORPUS-02 fully enforced (extraction
-+ persistence + chunk boundary), REQ-CORPUS-04 enforced,
-REQ-CHUNK-01/02/03 enforced. Two persisted baselines committed and
-SHA256-locked: [`corpus/pages.jsonl`](corpus/pages.jsonl) (833 pages
-across 11 ANSSI guides) and [`corpus/chunks.jsonl`](corpus/chunks.jsonl)
-(1239 chunks with strict-substring provenance into pages.jsonl).
-Brique 2 (embeddings) consumes `chunks.jsonl` next.
+Brique 0, 1, **2 complete**. Three committed baselines chained end-to-end:
+[`corpus/pages.jsonl`](corpus/pages.jsonl) (833 pages, SHA256-locked)
+→ [`corpus/chunks.jsonl`](corpus/chunks.jsonl) (1239 chunks,
+SHA256-locked, strict-substring provenance) →
+[`corpus/embeddings.npy`](corpus/embeddings.npy) +
+[`corpus/embeddings_index.jsonl`](corpus/embeddings_index.jsonl)
+(BGE-M3, L2-normalized, properties-verified). Enforced today:
+REQ-CORPUS-01/02/03/04, REQ-CHUNK-01/02/03/04,
+REQ-EMBED-01/02, REQ-RETRIEVE-01. Brique 3 (RAG generation)
+consumes `retrieve()` next.
 
 ## Stack
 
@@ -258,13 +321,29 @@ SHA256-locked per REQ-CHUNK-03):
 python chunk_pages.py
 ```
 
-Both output files are versioned; a fresh clone inherits the
-committed baselines without re-running pdfplumber or the chunker.
-Regenerate only when [`corpus/manifest.yaml`](corpus/manifest.yaml),
-the extractor, or the chunker changes — the `git diff` on
-`pages.jsonl` / `chunks.jsonl` is then the audit artefact, and the
-SHA256 in the manifest must be bumped in the same PR (deliberate
-gesture, not an accident).
+Build the embedding matrix from the committed chunks (BGE-M3 CPU-only,
+L2-normalized, first run downloads the model ~2.3 GB to the Hugging Face
+cache — subsequent runs are ~1-2 min for the whole corpus):
+
+```
+python build_embeddings.py
+```
+
+Query the retrieval pipeline from the CLI:
+
+```
+python retrieve.py "Quelles sont les recommandations MFA de l'ANSSI ?" -k 4
+```
+
+All artifact files are versioned; a fresh clone inherits the committed
+baselines without re-running pdfplumber, the chunker, or the embedder.
+Regenerate only when [`corpus/manifest.yaml`](corpus/manifest.yaml) or
+the corresponding producer changes — the `git diff` on `pages.jsonl` /
+`chunks.jsonl` is then the audit artefact, and the SHA256 in the manifest
+must be bumped in the same PR (deliberate gesture, not an accident).
+`embeddings.npy` follows the properties-verified contract (see
+Brique 2 section above) — the hash is informational and re-computed
+per-machine at build time.
 
 To extract or chunk programmatically:
 
