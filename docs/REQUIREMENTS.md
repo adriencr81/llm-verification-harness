@@ -259,6 +259,39 @@ caractères, jamais en espace tokens — pas de perte au *decode*).
   - `tests/test_chunk_pages.py::test_hard_split_pieces_are_contiguous_and_cover_input`
   - `tests/test_chunk_pages.py::test_split_keeping_sep_left_covers_input_contiguously`
 
+### `REQ-CHUNK-04` — Filtre indexation-time des micro-chunks
+
+Le retriever (Brique 2) exclut de l'index vectoriel les chunks dont
+`token_count(text, cl100k_base) < MIN_TOKENS = 10`. Motivation : les
+micro-chunks (headers répétés, artefacts d'extraction, pages
+quasi-vides restées après le déparasitage) créent du bruit en similarité
+cosinus sans porter de signal exploitable en aval.
+
+**Localisation du filtre** — au niveau du builder d'embeddings
+(`build_embeddings.filter_indexable`), **pas** en amont dans
+`chunk_pages.py`. Deux raisons :
+
+- Fusionner ou dropper les micro-chunks dans le chunker casserait le
+  SHA256 lock de `chunks.jsonl` (REQ-CHUNK-03) — dette technique
+  historique préservée pour audit.
+- Bonne séparation des responsabilités IVVQ : le chunker reste **fidèle
+  au texte source**, le retriever fait les choix pragmatiques. Un
+  consommateur qui rejouerait le chunking (VCD B7) verrait les mêmes
+  offsets que le corpus committé, même en changeant la politique de
+  filtrage aval.
+
+**Statut** — *enforced*. Les chunks filtrés restent dans `chunks.jsonl`
+(audit préservé), mais n'apparaissent pas dans `embeddings_index.jsonl`.
+
+- **Producteur** : `build_embeddings.filter_indexable`
+- **Consommateur** : `build_embeddings.main` (avant `encode_chunks`),
+  `retrieve` (opère uniquement sur les chunks indexés)
+- **Tests** :
+  - `tests/test_embeddings.py::test_filter_indexable_drops_chunks_below_min_tokens`
+  - `tests/test_embeddings.py::test_filter_indexable_preserves_input_order`
+  - `tests/test_embeddings.py::test_filter_indexable_reports_dropped_count`
+  - `tests/test_embeddings.py::test_committed_index_is_ordered_subset_of_chunks_jsonl`
+
 ### `REQ-CHUNK-03` — Baseline gelée du chunking (`chunks.jsonl`)
 
 La sortie du chunker est persistée dans `corpus/chunks.jsonl`
@@ -299,6 +332,93 @@ ordre, `ensure_ascii=False`, ordre : documents selon l'ordre de
   tiktoken qui ne matche pas la déclaration).
 - **Test de déterminisme** :
   `tests/test_chunk_pages.py::test_chunk_all_second_run_is_bit_for_bit_identical`
+
+## Embeddings & Retrieval (`REQ-EMBED-*`, `REQ-RETRIEVE-*`)
+
+### `REQ-EMBED-01` — Modèle d'embedding pinné au producer_env
+
+Le modèle utilisé pour vectoriser le corpus est pinné dans
+`derived_artifacts.embeddings_npy.producer_env` (`model`, `revision`,
+`sentence_transformers`, `torch`, `transformers`, `huggingface_hub`,
+`numpy`, `device`, `normalize_embeddings`, `dtype`, `dim`,
+`batch_size`, `min_tokens_filter`). Un swap déplace le contrat
+délibérément.
+
+**Choix courant** : `BAAI/bge-m3` sur CPU, `normalize_embeddings=True`,
+`dtype=float32`, `dim=1024`. Justification en 3 phrases : SOTA MTEB FR
+au moment T, contexte 8192 tokens, sortie L2-normalisée nativement
+supportée par `sentence-transformers`. Un mini-bench a été écarté (le
+banc rigoureux atterrit en B7 sur les réponses du RAG, pas sur les
+embeddings).
+
+- **Producteur** : `build_embeddings.py`
+- **Consommateur** : `retrieve.py` (charge le même modèle pour encoder
+  les requêtes)
+- **Tests** :
+  - `tests/test_embeddings.py::test_committed_embeddings_has_expected_dim_and_dtype`
+
+### `REQ-EMBED-02` — Baseline vectorielle vérifiée par propriétés
+
+L'artefact `corpus/embeddings.npy` est committé pour reproductibilité
+et audit. **Contrairement à `pages.jsonl` / `chunks.jsonl`, on ne fige
+pas le SHA256 comme régression bloquante** : un embedding neural n'est
+pas reproductible bit-à-bit cross-machine (BLAS/MKL, ordre des sommes
+flottantes). Le figer serait un faux contrat qui pèterait au premier
+changement d'OS. On documente le hash pour traçabilité,
+on teste les **propriétés vérifiables** :
+
+- `matrix.ndim == 2`, `matrix.shape[1] == 1024`, `matrix.dtype == float32`
+- Vecteurs L2-normalisés : `∀i, |‖matrix[i]‖₂ − 1| < 1e-5` — contrat
+  qui permet à `retrieve` de traiter `matrix @ query` comme cosine.
+- `matrix.shape[0] == len(embeddings_index.jsonl)` — matrix et index
+  partagent l'ordre des lignes.
+- `embeddings_index.jsonl` schema = `chunks.jsonl` schema, sous-ensemble
+  ordonné (REQ-CHUNK-04 appliqué).
+
+**Choix méthodologique documenté** — *"on fige ce qui est fixable ; on
+ne prétend pas contrôler ce qu'on ne peut pas garantir sur toutes les
+machines"*. Un SHA256 bit-à-bit sur des vecteurs neuraux serait un
+**faux contrat** : il pèterait dès qu'un contributeur régénère sur
+une machine avec BLAS/MKL différent, sans qu'aucune régression
+réelle n'ait eu lieu. La bonne discipline IVVQ ici est de figer les
+propriétés qui gouvernent le comportement aval (dim, norm L2, count,
+schéma, ordre), pas les bits.
+
+- **Producteur** : `build_embeddings.py` (atomic via `.tmp` sidecar)
+- **Consommateur** : `retrieve.py`
+- **Tests** :
+  - `tests/test_embeddings.py::test_committed_embeddings_are_l2_normalized` (**primaire**)
+  - `tests/test_embeddings.py::test_committed_matrix_rows_match_index_rows`
+  - `tests/test_embeddings.py::test_committed_index_schema_matches_chunks_jsonl`
+  - `tests/test_embeddings.py::test_committed_index_is_ordered_subset_of_chunks_jsonl`
+
+### `REQ-RETRIEVE-01` — API `retrieve(question, k) → list[RetrievalResult]`
+
+Signature stable et minimale pour la Brique 3 :
+
+```python
+def retrieve(question: str, k: int = 4) -> list[RetrievalResult]: ...
+```
+
+Contrat :
+
+- Renvoie une liste triée par `score` **décroissant** (le meilleur match
+  en position 0).
+- Longueur `min(k, len(index))` — pas d'erreur sur corpus plus petit
+  que `k`. `retrieve(_, k=0) == []`.
+- `RetrievalResult` porte tous les champs du chunk source (`doc_id`,
+  `page_num`, `chunk_idx`, `char_start`, `char_end`, `text`) plus
+  `score` : cosine similarity brute dans `[-1, 1]`, **non rescalée** en
+  `[0, 1]`. Les stages aval (LLM-as-judge B6, VCD B7) peuvent avoir
+  besoin de distinguer un match faible d'un match orthogonal.
+- Pas de threshold min, pas de rerank : le retriever est un tri, pas un
+  filtre — cadrage explicite pour ne pas dupliquer la logique du banc.
+
+- **Producteur** : `retrieve.retrieve`
+- **Consommateur** : Brique 3 (RAG), Brique 5 (banc de vérification)
+- **Tests** :
+  - `tests/test_embeddings.py::test_retrieve_returns_top_k_sorted_desc`
+  - `tests/test_embeddings.py::test_retrieve_k_zero_returns_empty`
 
 ## Statut
 

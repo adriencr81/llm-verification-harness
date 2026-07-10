@@ -13,3 +13,7 @@
 # subject to any newline translation. (They are git-ignored today; the
 # rule is defensive against a future decision to track them.)
 *.pdf binary
+
+# Same treatment for the embedding matrix committed under corpus/
+# (Brique 2). np.save output is a binary format; no EOL translation.
+*.npy binary
