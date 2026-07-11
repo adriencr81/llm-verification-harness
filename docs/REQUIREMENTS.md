@@ -450,7 +450,7 @@ compteurs > 0, refus détecté hors corpus), pas des égalités.
 - **Producteur** : `ask.ask`
 - **Consommateur** : Brique 7 (banc VCD)
 - **Tests** :
-  - `tests/test_ask.py::test_ask_smoke_answers_typical_anssi_question_with_citations`
+  - `tests/test_ask.py::test_ask_smoke_answers_typical_anssi_question`
   - `tests/test_ask.py::test_ask_citations_reference_retrieved_chunks_consistently`
   - `tests/test_ask.py::test_extract_citations_parses_valid_ids_dedups_and_ignores_out_of_range`
 
@@ -477,9 +477,16 @@ et documenter le mode de défaillance.
 - **Producteur** : `ask.SYSTEM_PROMPT`
 - **Consommateur** : `ask.ask` (chaque appel), Brique 4 (attaque contre
   la règle 2)
-- **Tests** : couverture indirecte via les tests smoke B3 (citations
-  format `[n]`, refus hors corpus). Le test de non-tenue de la règle 2
-  sera introduit en B4.
+- **Tests** :
+  - `tests/test_ask.py::test_ask_off_topic_question_produces_refusal_and_no_hallucination`
+    (couverture règle 1 : refus explicite + non-hallucination sur
+    question hors corpus)
+  - `tests/test_ask.py::test_extract_citations_parses_valid_ids_dedups_and_ignores_out_of_range`
+    (couverture règle 3 : format citations `[n]` machine-parsable, dedup,
+    hors-range ignoré)
+- **Test de falsifiabilité de la règle 2** : introduit en Brique 4
+  (indirect prompt injection). L'exigence B3 est de **poser la défense
+  revendiquée**, pas encore de la casser.
 
 ## Statut
 

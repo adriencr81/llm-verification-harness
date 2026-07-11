@@ -31,6 +31,10 @@ from retrieve import RetrievalResult, retrieve
 
 REPO_ROOT = Path(__file__).resolve().parent
 
+# Load OPENROUTER_API_KEY at import time — ``ask()`` is called in a loop
+# by the Brique 7 bench; re-reading .env on every call is wasted I/O.
+load_dotenv(REPO_ROOT / ".env")
+
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "anthropic/claude-haiku-4-5"
 DEFAULT_K = 4
@@ -130,7 +134,6 @@ def _extract_citations(
 
 
 def _client() -> OpenAI:
-    load_dotenv(REPO_ROOT / ".env")
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         raise RuntimeError(
