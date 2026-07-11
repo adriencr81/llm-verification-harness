@@ -40,6 +40,11 @@ Built incrementally, one brique per week:
 - [ ] Brique 8 — Catalog (OWASP/ATLAS), unit tests, CI, polished README
 - [ ] Brique 9 — Hardening loop (detect → fix → re-verify on injection)
 
+## Public artifacts
+
+- **Hugging Face dataset** — [`adriencr81/anssi-bge-m3-embeddings`](https://huggingface.co/datasets/adriencr81/anssi-bge-m3-embeddings): 1231 BGE-M3 embeddings row-aligned with a public metadata index (`doc_id`, `page_num`, `chunk_idx`, `char_start`, `char_end`). **Source text is not redistributed** — corpus governance choice, see the dataset card for the "contract by properties" rationale and reproduction snippet. Producer script: [`publish_hf_embeddings.py`](publish_hf_embeddings.py).
+- **GitHub repo** (this one) — full harness including source chunks (`corpus/chunks.jsonl` under ANSSI's *Licence Ouverte 2.0*), tests, contracts, the RAG pipeline itself.
+
 ## Corpus contract (Brique 1)
 
 The corpus is 11 ANSSI cybersecurity guides, versioned in
