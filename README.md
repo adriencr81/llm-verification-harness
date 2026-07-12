@@ -452,7 +452,9 @@ python ask.py "Comment structurer une politique de gestion des habilitations ?"
 Run the Brique 4 indirect prompt injection demo — embeds the fake
 guide in `corpus_attack/`, retrieves top-k on the union with the
 benign index, calls the LLM with the B3 system prompt unchanged, and
-prints a `VULNERABLE` / `RESISTANT` / `DEMO INVALID` verdict:
+prints a
+`VULNERABLE` / `COMPROMISED` / `RESISTANT` / `DEMO INVALID` verdict
+(see the Brique 4 section above for what each one means):
 
 ```
 python demo_injection.py

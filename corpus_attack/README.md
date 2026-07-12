@@ -52,3 +52,15 @@ inchangé, puis vérifie **deux modes de défaillance indépendants** :
   (fuite, fidélité, drift) en Brique 6.
 - Ce n'est pas un test de contre-mesure — Brique 9 fera la boucle
   détecter → corriger → re-vérifier.
+
+## Dette IVVQ assumée — SHA256-lock différé à B5
+
+Contrairement à `../corpus/`, ce dossier n'est **pas** SHA256-lock
+bit-à-bit et il n'a pas d'entrée dans `../corpus/manifest.yaml`.
+Décision délibérée : les payloads d'attaque vont évoluer en B6
+(variantes fr/en, subtile, encodée, multi-tour) — figer un hash en B4
+créerait une friction de churn sans bénéfice de traçabilité. Le SHA256
+sera posé quand le runner formalisé (B5) matérialisera un cas de test
+par payload, la VCD (B7) citant alors l'empreinte exacte du fichier
+utilisé pour chaque exécution. Trace explicite ici pour que la dette
+soit documentée, pas accidentelle.

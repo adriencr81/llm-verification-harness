@@ -6,8 +6,11 @@ import os
 
 import pytest
 
+from types import SimpleNamespace
+
 from ask import (
     Answer,
+    _answer_from_chunks,
     _build_user_message,
     _extract_citations,
     _format_context,
@@ -97,6 +100,48 @@ def test_extract_citations_parses_valid_ids_dedups_and_ignores_out_of_range():
 def test_extract_citations_empty_when_no_bracket_refs():
     chunks = [_mk_chunk("a")]
     assert _extract_citations("Réponse sans référence.", chunks) == ()
+
+
+def test_answer_from_chunks_assembles_instrumented_answer(monkeypatch):
+    """The shared chunks-to-Answer helper (also used by the B4 injection
+    demo) must round-trip a mocked LLM response into a fully-populated
+    ``Answer``: citations resolved against the passed-in chunks (not a
+    re-retrieval), usage tokens carried through, ``retrieved_chunks``
+    mirroring the input tuple. Guards the single code path both
+    ``ask()`` and ``demo_injection.run_demo()`` share."""
+    fake_resp = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content="Réponse [1] et [2].")
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=42, completion_tokens=17),
+    )
+
+    class _FakeCompletions:
+        @staticmethod
+        def create(**kwargs):
+            return fake_resp
+
+    class _FakeChat:
+        completions = _FakeCompletions()
+
+    class _FakeClient:
+        chat = _FakeChat()
+
+    monkeypatch.setattr("ask._client", lambda: _FakeClient())
+
+    chunks = [_mk_chunk("mfa", 3, 0, "Alpha."), _mk_chunk("pra", 12, 4, "Bravo.")]
+    ans = _answer_from_chunks("Question ?", chunks, model="stub-model")
+
+    assert ans.text == "Réponse [1] et [2]."
+    assert ans.tokens_in == 42
+    assert ans.tokens_out == 17
+    assert ans.model == "stub-model"
+    assert ans.retrieved_chunks == tuple(chunks)
+    assert len(ans.citations) == 2
+    assert ans.citations[0].doc_id == "mfa"
+    assert ans.citations[1].doc_id == "pra"
 
 
 # --- Integration tests (call the real LLM via OpenRouter) -------------------
