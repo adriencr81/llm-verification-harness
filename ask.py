@@ -142,16 +142,20 @@ def _client() -> OpenAI:
     return OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
 
 
-def ask(
+def _answer_from_chunks(
     question: str,
-    k: int = DEFAULT_K,
+    chunks: list[RetrievalResult],
     model: str = DEFAULT_MODEL,
     temperature: float = DEFAULT_TEMPERATURE,
 ) -> Answer:
-    """Run the full RAG pipeline and return an instrumented :class:`Answer`."""
-    chunks = retrieve(question, k=k)
-    user_msg = _build_user_message(question, chunks)
+    """LLM call + instrumentation over an already-retrieved chunk list.
 
+    Extracted so the standard pipeline (``ask()``) and the Brique 4
+    injection demo (retrieval on the benign ∪ attack union) share the
+    same code path from *chunks → Answer*. Any future hardening at that
+    boundary (B9) applies to both callers by construction.
+    """
+    user_msg = _build_user_message(question, chunks)
     client = _client()
     t0 = time.perf_counter()
     resp = client.chat.completions.create(
@@ -163,12 +167,10 @@ def ask(
         ],
     )
     latency_ms = int((time.perf_counter() - t0) * 1000)
-
     text = resp.choices[0].message.content or ""
     usage = resp.usage
     tokens_in = getattr(usage, "prompt_tokens", 0) or 0
     tokens_out = getattr(usage, "completion_tokens", 0) or 0
-
     return Answer(
         text=text,
         citations=_extract_citations(text, chunks),
@@ -178,6 +180,19 @@ def ask(
         latency_ms=latency_ms,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
+    )
+
+
+def ask(
+    question: str,
+    k: int = DEFAULT_K,
+    model: str = DEFAULT_MODEL,
+    temperature: float = DEFAULT_TEMPERATURE,
+) -> Answer:
+    """Run the full RAG pipeline and return an instrumented :class:`Answer`."""
+    chunks = retrieve(question, k=k)
+    return _answer_from_chunks(
+        question, chunks, model=model, temperature=temperature
     )
 
 
