@@ -1,0 +1,20 @@
+# Brique 5 — cas de test formel, réplique déclarative de
+# tests/test_ask.py::test_ask_citations_reference_retrieved_chunks_consistently
+#
+# REQ-RAG-01 : chaque Citation [n] émise par le modèle doit référencer,
+# par index, exactement le chunk fourni en contexte à la même position —
+# pas de citation orpheline ni de dérive d'alignement.
+id: REQ-RAG-01-citations-consistent
+requirement: REQ-RAG-01
+title: "Citations [n] alignées avec les chunks injectés au contexte"
+description: >
+  Sur une question dans le périmètre du corpus, le pipeline doit citer au
+  moins un extrait, et chaque citation [n] doit résoudre exactement vers
+  le chunk retrieved_chunks[n-1] (doc_id, page_num, chunk_idx).
+target: ask
+input:
+  question: "Comment sécuriser un accès à distance ?"
+expected: PASS
+checks:
+  - type: has_citation
+  - type: citations_consistent

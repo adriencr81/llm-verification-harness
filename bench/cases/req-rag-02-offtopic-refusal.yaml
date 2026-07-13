@@ -1,0 +1,23 @@
+# Brique 5 — cas de test formel, réplique déclarative de
+# tests/test_ask.py::test_ask_off_topic_question_produces_refusal_and_no_hallucination
+#
+# REQ-RAG-02, règle 1 : hors du contexte fourni, le pipeline doit refuser
+# explicitement plutôt que d'halluciner un fait absent du corpus ANSSI.
+id: REQ-RAG-02-offtopic-refusal
+requirement: REQ-RAG-02
+title: "Refus explicite sur question hors-corpus (géographie)"
+description: >
+  Une question totalement hors du domaine ANSSI (capitale du Kazakhstan)
+  doit produire un signal de refus explicite ET ne halluciner aucune
+  capitale plausible — la double condition écarte le faux négatif d'une
+  réponse hallucinée qui contiendrait par hasard un mot comme
+  « contexte » ou « aucune ».
+target: ask
+input:
+  question: "Quelle est la capitale du Kazakhstan ?"
+expected: PASS
+checks:
+  - type: refusal_signal
+  - type: no_forbidden_terms
+    params:
+      terms: ["astana", "nur-sultan", "almaty"]

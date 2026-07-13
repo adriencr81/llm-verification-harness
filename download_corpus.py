@@ -12,16 +12,19 @@ cryptographique" property cited by the VCD (Brique 7). Silent drift is refused
 by construction — any change must be either restored or explicitly acknowledged
 by bumping the manifest.
 
-Upstream requirements (see docs/REQUIREMENTS.md, provisoire jusqu'à Brique 5,
-cited by VCD §corpus in Brique 7) :
+Upstream requirements (see docs/REQUIREMENTS.md, registre gelé depuis la
+Brique 5, cité par le VCD §corpus en Brique 7) :
 - REQ-CORPUS-01 : non-altération binaire (SHA256) — enforcée à chaque run.
 - REQ-CORPUS-03 : sanity check de taille (bytes) — opt-in, exécuté avant
-  SHA256 quand le champ `bytes` est présent au manifest.
+  SHA256 quand le champ `bytes` est présent au manifest. Le sous-volet
+  schéma (`bytes`/`pages` doivent être des int, `sha256` un hex64) est
+  vérifié en amont par `validate_manifest_schema` — Brique 5.
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,6 +76,63 @@ class CorpusSizeError(CorpusError):
 
 class MissingSourceError(CorpusError):
     """A PDF is absent and cannot be fetched automatically."""
+
+
+class CorpusSchemaError(CorpusError):
+    """A manifest entry violates the field-type contract.
+
+    Closes the schema-validation debt flagged by REQ-CORPUS-03 (see
+    docs/REQUIREMENTS.md): a YAML ``bytes: "123"`` (quoted string) would
+    otherwise slide through ``verify_document`` and silently poison the
+    size check downstream (``str != int`` never matches, so the check
+    just never fires — a much more confusing failure than a schema
+    error caught at the manifest boundary). Brique 5.
+    """
+
+
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_INT_FIELDS = ("bytes", "pages")
+
+
+def _validate_entry_schema(entry: dict, label: str) -> list[str]:
+    """Type-check the contracted fields of one manifest entry.
+
+    Applies to both ``documents[]`` and ``derived_artifacts.*`` — both
+    sections carry the same ``sha256``/``bytes`` contract.
+    """
+    errors: list[str] = []
+    for name in _INT_FIELDS:
+        if name in entry and not isinstance(entry[name], int):
+            errors.append(
+                f"[{label}] '{name}' must be an int, got "
+                f"{type(entry[name]).__name__} ({entry[name]!r})"
+            )
+    sha256 = entry.get("sha256")
+    if sha256 is not None and not _SHA256_RE.fullmatch(str(sha256)):
+        errors.append(
+            f"[{label}] 'sha256' must be a 64-char lowercase hex string, "
+            f"got {sha256!r}"
+        )
+    return errors
+
+
+def validate_manifest_schema(manifest: dict) -> None:
+    """Type-check every ``documents[]`` and ``derived_artifacts.*`` entry.
+
+    Raises :class:`CorpusSchemaError` listing every violation found —
+    same accumulate-don't-stop-at-first-failure posture as
+    :func:`verify_all`. Call this before :func:`verify_all` so a
+    malformed manifest is refused before any disk I/O or network call.
+    """
+    errors: list[str] = []
+    for doc in manifest.get("documents", []):
+        errors.extend(_validate_entry_schema(doc, doc.get("doc_id", "<unknown>")))
+    for name, entry in manifest.get("derived_artifacts", {}).items():
+        errors.extend(_validate_entry_schema(entry, f"derived_artifacts.{name}"))
+    if errors:
+        raise CorpusSchemaError(
+            "Manifest schema violation(s):\n" + "\n".join(errors)
+        )
 
 
 @dataclass
@@ -237,6 +297,13 @@ def verify_all(documents: Iterable[dict], pdf_dir: Path) -> VerificationReport:
 def main() -> int:
     manifest = load_manifest(MANIFEST_PATH)
     documents = manifest["documents"]
+
+    try:
+        validate_manifest_schema(manifest)
+    except CorpusSchemaError as err:
+        print(f"\n=== SCHEMA FAILURES ===\n{err}", file=sys.stderr)
+        return 1
+
     print(f"Verifying {len(documents)} document(s) against {MANIFEST_PATH}")
 
     report = verify_all(documents, PDF_DIR)
