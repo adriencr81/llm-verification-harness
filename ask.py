@@ -59,6 +59,29 @@ l'extrait dans le contexte.
 4. Réponds en français, de façon concise et factuelle."""
 
 
+# Lexical signals of an explicit refusal ("contexte insuffisant") under
+# rule #1 of ``SYSTEM_PROMPT``. Not a semantic classifier — a cheap,
+# falsifiable substring check shared by the B3 off-topic test and the
+# Brique 5 bench (``bench_runner.py``, check type ``refusal_signal``).
+REFUSAL_SIGNALS = (
+    "contexte",
+    "extraits",
+    "ne permet pas",
+    "je ne sais pas",
+    "aucune",
+    "pas d'information",
+    "ne dispose pas",
+    "ne contient",
+    "ne fournit",
+)
+
+
+def is_refusal_signal(text: str) -> bool:
+    """True iff ``text`` contains one of the lexical refusal signals."""
+    lower = text.lower()
+    return any(sig in lower for sig in REFUSAL_SIGNALS)
+
+
 @dataclass(frozen=True)
 class Citation:
     """A single citation extracted from the model's answer.

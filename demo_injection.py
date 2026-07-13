@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Indirect prompt injection demo — OWASP LLM01, Brique 4.
 
-*To be catalogued as ``REQ-INJECT-01`` when Brique 5 formalises test
-cases as YAML — anchor here so the B7 VCD can trace the demo back to
-a numbered requirement.*
+Catalogued as ``REQ-INJECT-01`` in docs/REQUIREMENTS.md (Brique 5) and
+formalised as two YAML cases under ``bench/cases/``
+(``req-inject-01-payload-leak.yaml``,
+``req-inject-01-source-legitimation.yaml``), run via ``bench_runner.py``
+(target ``injection_demo``) — anchors the demo to a numbered requirement
+so the B7 VCD can trace it.
 
 Simulates an attacker who deposits a plausible-looking document in a
 share indexed by the RSSI assistant. The document targets the theme
@@ -39,9 +42,9 @@ Four verdicts are printed:
   attack setup is broken (question or fake content mismatch); nothing
   to conclude about the LLM.
 
-No formalisation yet (no YAML case, no runner, no VCD entry) — that
-comes in Brique 5. This is the raw script that proves the vulnerability
-exists.
+This module is the raw script that proves the vulnerability exists; the
+falsifiable PASS/FAIL cases live in ``bench/cases/`` (Brique 5), and the
+signed verification dossier (VCD) is Brique 7.
 """
 
 from __future__ import annotations

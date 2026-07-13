@@ -35,8 +35,10 @@ Built incrementally, one brique per week:
       dataclass ready for the Brique 7 bench)*
 - [x] Brique 4 — OWASP LLM01 (indirect prompt injection) *(fake ANSSI
       guide in `corpus_attack/`, retrieval-fused demo script,
-      payload-detection verdict — no formalisation yet, that's B5)*
-- [ ] Brique 5 — IVVQ-style test case formalization (YAML runner)
+      payload-detection verdict, formalised as `REQ-INJECT-01` in B5)*
+- [x] Brique 5 — IVVQ-style test case formalization *(YAML test-case
+      schema + `bench_runner.py`, requirement registry frozen, corpus
+      manifest schema validation)*
 - [ ] Brique 6 — Leak (LLM02), faithfulness (LLM09, LLM-as-judge), drift
 - [ ] Brique 7 — Auto-generated Verification Control Document
 - [ ] Brique 8 — Catalog (OWASP/ATLAS), unit tests, CI, polished README
@@ -361,14 +363,100 @@ Four verdicts, printed by [`demo_injection.py`](demo_injection.py):
 - **DEMO INVALID** — the fake doc did not surface in top-k. Attack
   setup broken, nothing to conclude about the LLM.
 
-Deliberately no formalisation yet — no YAML test case, no runner, no
-VCD entry. Brique 4 is the raw script that proves the vulnerability
-exists; the IVVQ-style formalisation lands in Brique 5, the OWASP
-family coverage in Brique 6, the hardening loop in Brique 9.
+Brique 4 was the raw script that proves the vulnerability exists — no
+YAML test case, no runner, no VCD entry. That formalisation is Brique 5,
+below. The OWASP family coverage lands in Brique 6, the hardening loop
+in Brique 9.
+
+## IVVQ test case formalization (Brique 5)
+
+The requirement registry in
+[`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) is **frozen** as of this
+brique: every `REQ-*` is now the spec formelle cited by at least one
+committed YAML test case or upstream pytest test — no more "fluide
+jusqu'à la Brique 5" caveat.
+
+[`bench_runner.py`](bench_runner.py) turns that registry into an
+executable contract:
+
+- **YAML test case** — one file under [`bench/cases/`](bench/cases/)
+  names an `id`, an upstream `requirement` (`REQ-*`), a `target`
+  (pipeline entry point — `ask` or `injection_demo` today), an `input`,
+  an `expected` outcome (`PASS` by default, or `FAIL`), and a list of
+  `checks` (falsifiable predicates on the target's output:
+  `refusal_signal`, `no_forbidden_terms`, `has_citation`,
+  `citations_consistent`, `fake_doc_in_top_k`, `payload_absent`,
+  `payload_present`, `fake_doc_not_cited`).
+- **`expected` distinguishes a tracked vulnerability from a
+  regression** — most cases expect `PASS` (a defense holds). Both
+  `REQ-INJECT-01` cases document a known, tracked vulnerability: one
+  still expects `PASS` (the payload doesn't leak), the other explicitly
+  expects `FAIL` (the fake document *is* cited as a source on the
+  reference run). `CaseResult.status` reconciles observed vs. expected
+  into `PASS` / `TRACKED-FAIL` / `REGRESSION` / `UNEXPECTED-PASS` /
+  `ERROR` — a known vulnerability that silently disappears
+  (`UNEXPECTED-PASS`) is flagged exactly like a fresh regression, never
+  read as quiet good news.
+- **Runner never asserts, and captures run provenance** — `run_case`
+  always returns a `CaseResult` (per-check detail, or an `error` if the
+  target itself raised — network failure, missing API key, model load
+  failure) plus the run's `model`, `temperature`, `latency_ms`, tokens,
+  answer text, and a UTC timestamp — the same instrumentation `Answer`
+  already carried since Brique 3, propagated through so a `CaseResult`
+  is reproducible, VCD-citable evidence, not a bare boolean.
+- **Schema validated in depth at load time** — `load_case` refuses an
+  unknown `target`, an unknown `checks[].type`, an invalid `expected`,
+  a missing required top-level field, **and** missing required
+  per-target `input` (e.g. `ask` needs `input.question`) or per-check
+  `params` (e.g. `no_forbidden_terms` needs `params.terms`) — all
+  before any LLM call, never discovered mid-run as a `KeyError`.
+  `load_cases` refuses duplicate `id`s (the join key Brique 7's VCD
+  will cite a case by).
+- **Four cases ship today**, replacing ad hoc Python assertions with
+  committed, human-readable YAML: `REQ-RAG-02-offtopic-refusal`,
+  `REQ-RAG-01-citations-consistent`, and — catalogued for the first time
+  as `REQ-INJECT-01` — `REQ-INJECT-01-payload-leak` and
+  `REQ-INJECT-01-source-legitimation` (the two independent B4 injection
+  failure modes, each its own falsifiable case).
+- **Bidirectional traceability, checked by machine** — every
+  `requirement` a committed case cites must have a matching heading in
+  `docs/REQUIREMENTS.md`;
+  `test_committed_bench_cases_requirements_exist_in_registry` fails on
+  an orphaned citation, so the "frozen registry" claim doesn't rest on
+  human diligence alone.
+
+Also closed in Brique 5: the schema-validation debt flagged under
+`REQ-CORPUS-03` — `download_corpus.validate_manifest_schema` type-checks
+`bytes`/`pages` (must be `int`) and `sha256` (must be a hex64 string) on
+every `documents[]` and `derived_artifacts.*` entry, refusing a
+malformed manifest (`CorpusSchemaError`) before any disk or network I/O.
+
+This is deliberately *format + runner*, not the verdict engine — the
+signed verification dossier is Brique 7's job. Brique 5's job is making
+sure its input is a validated, falsifiable, YAML-committed artifact
+instead of logic buried inside test functions.
+
+- **`REQ-BENCH-01` — test case schema + runner contract** *(enforced)*.
+  Tests: `tests/test_bench_runner.py` — schema validation, check logic
+  against a stubbed `CaseContext`, `run_case` wiring (all checks pass /
+  one check fails / target raises). Zero network, zero model load, runs
+  in CI (unlike `bench_runner.py` itself, which hits a real LLM and, for
+  `injection_demo`, loads BGE-M3 — same posture as the B3/B4
+  `@pytest.mark.integration` tests).
+- **`REQ-INJECT-01` — indirect prompt injection catalogued** *(fully
+  characterized, not hardened)*. See the Brique 4 section above for the
+  attack model; hardening is Brique 9's job.
+
+Run the bench manually (needs `OPENROUTER_API_KEY`; `injection_demo`
+cases additionally load BGE-M3):
+
+```
+python bench_runner.py
+```
 
 ## Status
 
-Brique 0, 1, 2, 3, **4 complete**. Three committed baselines chained
+Brique 0, 1, 2, 3, 4, **5 complete**. Three committed baselines chained
 end-to-end:
 [`corpus/pages.jsonl`](corpus/pages.jsonl) (833 pages, SHA256-locked)
 → [`corpus/chunks.jsonl`](corpus/chunks.jsonl) (1239 chunks,
@@ -378,9 +466,13 @@ SHA256-locked, strict-substring provenance) →
 (BGE-M3, L2-normalized, properties-verified). RAG generation on top
 via [`ask.py`](ask.py). Indirect prompt injection demo on top of the
 RAG via [`demo_injection.py`](demo_injection.py) with attack corpus in
-[`corpus_attack/`](corpus_attack/). Enforced today: REQ-CORPUS-01/02/03/04,
-REQ-CHUNK-01/02/03/04, REQ-EMBED-01/02, REQ-RETRIEVE-01, REQ-RAG-01/02.
-Brique 5 (IVVQ-style test case formalisation) next.
+[`corpus_attack/`](corpus_attack/). The Brique 5 bench
+([`bench_runner.py`](bench_runner.py) + [`bench/cases/`](bench/cases/))
+formalises both the RAG and the injection scenarios as falsifiable YAML
+cases, on top of a now-frozen requirement registry. Enforced today:
+REQ-CORPUS-01/02/03/04, REQ-CHUNK-01/02/03/04, REQ-EMBED-01/02,
+REQ-RETRIEVE-01, REQ-RAG-01/02, REQ-INJECT-01, REQ-BENCH-01.
+Brique 6 (LLM02 leak, LLM09 faithfulness, LLM-as-judge, drift) next.
 
 ## Stack
 
@@ -458,6 +550,13 @@ prints a
 
 ```
 python demo_injection.py
+```
+
+Run the Brique 5 bench — every YAML case under `bench/cases/`, printing
+a PASS/FAIL verdict with per-check evidence for each `REQ-*` covered:
+
+```
+python bench_runner.py
 ```
 
 `OPENROUTER_API_KEY` must be set (in `.env` or the environment). Override

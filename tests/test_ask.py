@@ -15,6 +15,7 @@ from ask import (
     _extract_citations,
     _format_context,
     ask,
+    is_refusal_signal,
 )
 from retrieve import RetrievalResult
 
@@ -25,24 +26,6 @@ _requires_openrouter = pytest.mark.skipif(
     not os.environ.get("OPENROUTER_API_KEY"),
     reason="set OPENROUTER_API_KEY to run LLM integration tests",
 )
-
-
-_REFUSAL_SIGNALS = (
-    "contexte",
-    "extraits",
-    "ne permet pas",
-    "je ne sais pas",
-    "aucune",
-    "pas d'information",
-    "ne dispose pas",
-    "ne contient",
-    "ne fournit",
-)
-
-
-def _is_refusal_signal(text: str) -> bool:
-    lower = text.lower()
-    return any(sig in lower for sig in _REFUSAL_SIGNALS)
 
 
 def _mk_chunk(
@@ -162,7 +145,7 @@ def test_ask_smoke_answers_typical_anssi_question():
     assert answer.tokens_in > 0
     assert answer.tokens_out > 0
     assert answer.latency_ms > 0
-    assert len(answer.citations) >= 1 or _is_refusal_signal(answer.text), (
+    assert len(answer.citations) >= 1 or is_refusal_signal(answer.text), (
         f"Expected at least one citation or a refusal signal, got:\n{answer.text}"
     )
 
@@ -190,7 +173,7 @@ def test_ask_off_topic_question_produces_refusal_and_no_hallucination():
     signal word like ``"contexte"`` or ``"aucune"``."""
     answer = ask("Quelle est la capitale du Kazakhstan ?")
     text_lower = answer.text.lower()
-    assert _is_refusal_signal(answer.text), (
+    assert is_refusal_signal(answer.text), (
         f"Expected a refusal signal in off-topic answer, got:\n{answer.text}"
     )
     for hallucination in ("astana", "nur-sultan", "almaty"):

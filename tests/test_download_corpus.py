@@ -241,6 +241,76 @@ def test_verify_all_accumulates_size_errors(tmp_path: Path) -> None:
     assert "wrong-size" in report.size_errors[0]
 
 
+def test_validate_manifest_schema_accepts_conformant_documents(
+    sample_manifest_entry: dict,
+) -> None:
+    sample_manifest_entry["bytes"] = 123
+    sample_manifest_entry["pages"] = 4
+    manifest = {"documents": [sample_manifest_entry]}
+    download_corpus.validate_manifest_schema(manifest)  # no raise
+
+
+def test_validate_manifest_schema_rejects_string_bytes(
+    sample_manifest_entry: dict,
+) -> None:
+    # REQ-CORPUS-03 : dette de validation de schéma fermée en Brique 5 —
+    # une valeur YAML mal typée en string ne doit plus glisser en silence.
+    sample_manifest_entry["bytes"] = "123"
+    manifest = {"documents": [sample_manifest_entry]}
+    with pytest.raises(download_corpus.CorpusSchemaError) as excinfo:
+        download_corpus.validate_manifest_schema(manifest)
+    message = str(excinfo.value)
+    assert "bytes" in message
+    assert sample_manifest_entry["doc_id"] in message
+
+
+def test_validate_manifest_schema_rejects_malformed_sha256(
+    sample_manifest_entry: dict,
+) -> None:
+    sample_manifest_entry["sha256"] = "not-a-hash"
+    manifest = {"documents": [sample_manifest_entry]}
+    with pytest.raises(download_corpus.CorpusSchemaError, match="sha256"):
+        download_corpus.validate_manifest_schema(manifest)
+
+
+def test_validate_manifest_schema_checks_derived_artifacts_too() -> None:
+    manifest = {
+        "documents": [],
+        "derived_artifacts": {"pages_jsonl": {"bytes": "not-an-int", "sha256": "0" * 64}},
+    }
+    with pytest.raises(download_corpus.CorpusSchemaError, match="derived_artifacts.pages_jsonl"):
+        download_corpus.validate_manifest_schema(manifest)
+
+
+def test_validate_manifest_schema_accumulates_all_violations(
+    sample_manifest_entry: dict,
+) -> None:
+    sample_manifest_entry["bytes"] = "123"
+    sample_manifest_entry["sha256"] = "bad-hash"
+    manifest = {"documents": [sample_manifest_entry]}
+    with pytest.raises(download_corpus.CorpusSchemaError) as excinfo:
+        download_corpus.validate_manifest_schema(manifest)
+    message = str(excinfo.value)
+    assert "bytes" in message
+    assert "sha256" in message
+
+
+def test_validate_manifest_schema_is_a_corpus_error(
+    sample_manifest_entry: dict,
+) -> None:
+    """Brique 7 VCD consumer relies on the CorpusError umbrella."""
+    sample_manifest_entry["bytes"] = "123"
+    manifest = {"documents": [sample_manifest_entry]}
+    with pytest.raises(download_corpus.CorpusError):
+        download_corpus.validate_manifest_schema(manifest)
+
+
+def test_real_manifest_satisfies_the_schema() -> None:
+    """Regression guard on the committed corpus/manifest.yaml itself."""
+    manifest = download_corpus.load_manifest(download_corpus.MANIFEST_PATH)
+    download_corpus.validate_manifest_schema(manifest)  # no raise
+
+
 def test_load_manifest_roundtrip(tmp_path: Path, sample_manifest_entry: dict) -> None:
     manifest_path = tmp_path / "manifest.yaml"
     manifest_path.write_text(
