@@ -126,7 +126,12 @@ Built incrementally, one brique per week:
       **not yet checked off**: no live LLM run has characterized any of
       the five new cases (no network/API access in the authoring
       sessions) — see [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md#statut)
-- [ ] Brique 7 — Auto-generated Verification Control Document
+- [~] Brique 7 — Auto-generated Verification Control Document —
+      generator shipped (`REQ-VCD-01`, [`vcd.py`](vcd.py)), Markdown
+      rendering fully tested against fabricated evidence, **not yet
+      checked off**: no real dossier produced yet — it depends on the
+      still-uncharacterized Brique 6 cases above, and this session had
+      no network/API access either
 - [ ] Brique 8 — OWASP/ATLAS catalog coverage
 - [ ] Brique 9 — Hardening loop (detect → fix → re-verify)
 
@@ -150,6 +155,14 @@ cases has been run against a real LLM yet — the authoring sessions had
 no OpenRouter network access. Each is *specified, not characterized*
 until that first run happens; see the closure note in
 [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md#statut).
+
+Brique 7 — the VCD generator itself shipped: [`vcd.py`](vcd.py)
+(`REQ-VCD-01`) turns a batch of `CaseResult` into the Markdown dossier
+described above, with Markdown rendering fully covered by tests that
+fabricate evidence for all five statuses — zero network. **Also not
+marked done**: no real `docs/VCD.md` has been generated yet, and
+running it for real is gated on Brique 6's own live run first — same
+missing-network-access constraint in this authoring session.
 
 ## Public artifacts
 
@@ -177,6 +190,9 @@ python demo_injection.py
 
 # Run the YAML bench (also needs OPENROUTER_API_KEY; loads BGE-M3)
 python bench_runner.py
+
+# Generate the Verification Control Document (same requirements as above)
+python vcd.py
 
 # Test suite
 python -m pytest -q

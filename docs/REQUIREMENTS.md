@@ -931,6 +931,89 @@ Brique 7 — ne pas anticiper ici la génération de dossier.
   second LLM (le juge) — même posture que les tests
   `@pytest.mark.integration` de B3/B4.
 
+## Dossier de vérification (`REQ-VCD-*`)
+
+### `REQ-VCD-01` — Verification Control Document auto-généré à partir des `CaseResult`
+
+Livré en Brique 7. `vcd.render_vcd(results, *, generated_at=None,
+git_sha="unknown", corpus_sha256="unknown") -> str` transforme une
+liste de `CaseResult` (produite par `bench_runner.run_cases`,
+Brique 5, étendue en Brique 6) en un dossier Markdown : une
+identification de configuration (commit git du harnais, SHA256 du
+baseline corpus vérifié), une synthèse par statut, une matrice de
+traçabilité `exigence → cas → statut`, et une section de détail par
+cas (checks individuels, provenance du run — modèle, température,
+latence, tokens, horodatage, les mêmes champs que `CaseResult` porte
+depuis la Brique 5).
+
+**Identification de configuration** — un VCD qui ne dit pas contre
+quelle version du harnais et quel corpus il a été produit ne répond
+pas à la question qu'un reviewer pose en premier : *"quel baseline a
+été vérifié ?"*. `vcd._git_sha()` (le commit git — pas de schéma
+semver séparé dans ce dépôt, le commit EST l'identifiant de version,
+même convention que `producer_env` pour les libs) et
+`vcd._corpus_chunks_sha256()` (le SHA256 de `corpus/chunks.jsonl`
+déclaré au manifest, `REQ-CHUNK-03` — l'artefact que le RAG et les
+démos d'attaque consomment réellement, pas le manifest entier) sont
+tous deux *best-effort, ne lèvent jamais* : un `git` absent ou un
+manifest malformé dégrade vers `"unknown"` plutôt que de bloquer la
+génération du dossier. `render_vcd` reste pure — ces deux chaînes lui
+sont passées en paramètre par `build_vcd`, jamais calculées en interne.
+
+**Fonction pure, séparée du coût réseau** — `render_vcd` ne fait aucun
+appel LLM ni I/O réseau, elle met seulement en forme des `CaseResult`
+déjà produits. `vcd.build_vcd` (charge les cas via
+`bench_runner.load_cases`, les exécute via `run_cases`, puis appelle
+`render_vcd`) porte le coût réseau/LLM — même séparation que
+`bench_runner.run_case` (logique) vs `bench_runner.main` (CLI qui
+frappe un vrai LLM). C'est cette séparation qui rend `render_vcd`
+testable en CI sans réseau : `tests/test_vcd.py` fabrique directement
+des `Case`/`CaseResult`, zéro fixture YAML, zéro appel réseau — même
+convention que `tests/test_bench_runner.py` pour la logique des checks.
+
+**Verdict global, pas de nouveau vocabulaire** — `COMPLIANT` si tous
+les cas sont à `PASS` ou `TRACKED-FAIL` (le même booléen que
+`CaseResult.passed`), `NON-COMPLIANT` sinon (au moins un
+`REGRESSION`, `UNEXPECTED-PASS` ou `ERROR`). Le VCD réutilise
+exactement les cinq statuts définis par `REQ-BENCH-01` — un reviewer
+qui connaît déjà le banc n'a rien de nouveau à apprendre pour lire le
+dossier.
+
+**Contrat par propriétés, pas bit-à-bit** — comme tout artefact en aval
+d'un appel LLM (embeddings B2, réponses B3), le VCD généré n'est
+**pas** reproductible bit-à-bit d'un run à l'autre : un `TRACKED-FAIL`
+connu peut redevenir `PASS` (`UNEXPECTED-PASS`) sur un second run sans
+qu'aucun code n'ait changé. Le dossier généré n'est donc pas committé
+comme artefact figé (contrairement à `pages.jsonl`/`chunks.jsonl`) —
+chaque exécution de `python vcd.py` réécrit `docs/VCD.md`, et le `git
+diff` sur ce fichier est l'audit trail humain, même discipline que les
+artefacts SHA256-lockés du corpus.
+
+**Statut** — *le générateur est livré et testé (rendu Markdown pur,
+zéro réseau) ; aucun dossier réel n'a encore été produit dans cette
+livraison* — pas d'accès réseau/API OpenRouter dans la session
+d'implémentation, même limite que `REQ-LEAK-01`/`REQ-FAITH-01`/
+`REQ-DRIFT-01` en Brique 6. `python vcd.py` reste à exécuter contre un
+LLM réel (une fois les cinq cas Brique 6 eux-mêmes caractérisés) pour
+produire le premier dossier committable.
+
+- **Producteur** : `vcd.render_vcd` (rendu pur), `vcd.build_vcd` /
+  `vcd.main` (CLI, run réel)
+- **Consommateur** : reviewer humain / autorité de qualification — le
+  livrable qui se lit sans ouvrir le code
+- **Tests (déterministes, zéro appel réseau)** : `tests/test_vcd.py` —
+  synthèse par statut (y compris le décompte `ERROR`), verdict global
+  (`COMPLIANT`/`NON-COMPLIANT`, avec glose explicite quand un
+  `TRACKED-FAIL` est présent), identification de configuration
+  (valeurs fournies et défaut `"unknown"`), matrice de traçabilité et
+  détail par cas rendus dans le même ordre `(exigence, id)`, cas
+  `ERROR`, échappement des cellules de tableau Markdown (`|` et
+  retours à la ligne) — et `build_vcd` refuse un répertoire de cas
+  vide plutôt que de produire un dossier `COMPLIANT` par vacuité
+- **Non couvert par CI** : `python vcd.py` lui-même (charge et exécute
+  les cas réels via `bench_runner`, donc hérite de tous ses appels
+  réseau/LLM) — même posture que `bench_runner.py`
+
 ## Statut
 
 **Gelé — Brique 5, complété en Brique 6.** `REQ-LEAK-01` (fuite,
@@ -954,12 +1037,20 @@ différée sans trace. Tant que ce run n'a pas eu lieu, le roadmap du
 README ne doit pas cocher la Brique 6 comme terminée ; le statut réel
 est *harnais et spec livrés, caractérisation empirique en attente*.
 
+**Brique 7 — même clôture non prononcée, pour la même raison.**
+`REQ-VCD-01` (générateur de dossier Markdown à partir des `CaseResult`)
+est livré et testé de façon déterministe, mais aucun dossier n'a
+encore été produit contre un run réel — il dépendrait de toute façon
+de la caractérisation empirique de Brique 6 encore en attente
+ci-dessus. Le roadmap du README ne doit pas cocher la Brique 7 comme
+terminée tant que ce premier run n'a pas eu lieu.
+
 Tous les `REQ-*` listés ici sont stables : IDs
 `REQ-CORPUS-*`, `REQ-CHUNK-*`, `REQ-EMBED-*`, `REQ-RETRIEVE-*`,
 `REQ-RAG-*` hérités des Briques 1-3, complétés par `REQ-INJECT-01`
-(Brique 4, catalogué formellement ici) et `REQ-BENCH-01` (le format de
-cas de test + runner qui matérialise ce gel). Toute nouvelle exigence à
-partir d'ici est un ajout, pas une réécriture — un renommage d'ID gelé
-casserait la traçabilité des cas YAML déjà committés sous `bench/cases/`.
-Prochaine extension prévue : `REQ-VCD-*` en Brique 7 (dossier de
-vérification généré à partir des `CaseResult` du banc).
+(Brique 4, catalogué formellement ici), `REQ-BENCH-01` (le format de
+cas de test + runner qui matérialise ce gel), `REQ-LEAK-01` /
+`REQ-FAITH-01` / `REQ-DRIFT-01` (Brique 6) et `REQ-VCD-01` (Brique 7).
+Toute nouvelle exigence à partir d'ici est un ajout, pas une
+réécriture — un renommage d'ID gelé casserait la traçabilité des cas
+YAML déjà committés sous `bench/cases/`.

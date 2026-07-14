@@ -597,6 +597,95 @@ Requirements:
 
 ---
 
+## Verification Control Document (Brique 7)
+
+[`../vcd.py`](../vcd.py) turns a batch of `bench_runner.CaseResult`
+into the "signature deliverable" the root README promises: a Markdown
+dossier a reviewer reads without opening the code — a status summary,
+a requirement-to-case traceability matrix, and a per-case detail
+section carrying the exact evidence each `CaseResult` already captures
+(checks, model, temperature, latency, tokens, timestamp).
+
+### Design choices
+
+- **Pure render, separate from the run.** `vcd.render_vcd(results, *,
+  generated_at=None) -> str` does no I/O and no LLM call — it only
+  formats `CaseResult` objects produced elsewhere. `vcd.build_vcd`
+  (load via `bench_runner.load_cases`, execute via `run_cases`, format
+  via `render_vcd`) carries the network/LLM cost, mirroring the
+  `bench_runner.run_case` (logic) vs. `bench_runner.main` (CLI that
+  hits a real LLM) split. That split is what makes `render_vcd`
+  testable in CI with zero network:
+  [`../tests/test_vcd.py`](../tests/test_vcd.py) fabricates
+  `Case`/`CaseResult` directly, same convention
+  `tests/test_bench_runner.py` already uses for check logic.
+- **No new status vocabulary.** The VCD reuses exactly the five
+  `CaseResult.status` values `REQ-BENCH-01` defines
+  (`PASS`/`TRACKED-FAIL`/`REGRESSION`/`UNEXPECTED-PASS`/`ERROR`) and
+  derives one top-line binary verdict from `CaseResult.passed`:
+  `COMPLIANT` if every case is at its expected outcome,
+  `NON-COMPLIANT` otherwise. A reviewer who already knows the bench
+  learns nothing new to read the dossier.
+- **Markdown, not PDF/HTML.** Consistent with every other doc in this
+  repo (`README.md`, `docs/REQUIREMENTS.md`, `docs/DESIGN.md`) —
+  diff-reviewable in a PR, renders natively on GitHub, no templating
+  layer or PDF-generation dependency to maintain for a baseline this
+  size. A signed/formal rendering (PDF, letterhead) is a natural
+  extension once there is a real dossier to sign, not a prerequisite
+  of this delivery.
+- **Not committed as a frozen artifact.** Unlike `pages.jsonl` /
+  `chunks.jsonl` (algorithmic, SHA256-locked), a generated VCD is
+  downstream of live LLM calls — not reproducible bit-for-bit across
+  runs, same "contract by properties" reasoning already applied to the
+  embeddings (B2) and RAG (B3) baselines: a `TRACKED-FAIL` on one run
+  can flip to `UNEXPECTED-PASS` on the next with zero code change.
+  Each `python vcd.py` invocation overwrites `docs/VCD.md`; `git diff`
+  on that file is the human audit trail — same discipline already used
+  for the SHA256-locked corpus artifacts, applied here to a
+  non-deterministic one.
+- **Configuration identification in the header.** A dossier that
+  doesn't say which harness version and which corpus baseline it was
+  produced against can't answer the first question a reviewer asks.
+  `vcd._git_sha()` (the git commit — this repo has no separate semver,
+  the commit *is* the version identifier, same convention
+  `producer_env` already uses to pin library versions) and
+  `vcd._corpus_chunks_sha256()` (`corpus/manifest.yaml`'s
+  `derived_artifacts.chunks_jsonl.sha256`, `REQ-CHUNK-03` — the exact
+  artifact retrieval/RAG/attack demos consume, not the whole manifest
+  file) are both best-effort and never raise, degrading to
+  `"unknown"` over a missing `git` binary or malformed manifest rather
+  than blocking dossier generation. `render_vcd` stays pure — these
+  two strings are computed by `build_vcd` and passed in, never
+  computed inside the render function itself.
+- **Refuses to render a vacuous dossier.** `build_vcd` raises if
+  `cases_dir` yields zero cases rather than emitting a `COMPLIANT`
+  dossier over nothing — for the "signature deliverable," a
+  false-green from a mistyped `--cases-dir` is worse than a loud
+  failure.
+
+### Known limitation
+
+No real VCD has been generated yet. `vcd.py`'s own execution path
+(`build_vcd`/`main`) inherits every network/LLM dependency of
+`bench_runner.py` — and, transitively, the still-uncharacterized
+Brique 6 cases (`REQ-LEAK-01`, `REQ-FAITH-01`, `REQ-DRIFT-01`; see the
+Brique 6 sections above). No OpenRouter access in this authoring
+session either. `render_vcd` itself is fully tested against fabricated
+evidence covering all five statuses; producing the first real,
+committable `docs/VCD.md` is future work, not a rendering-logic gap.
+
+Requirements:
+
+- **`REQ-VCD-01` — Markdown VCD generated from a `CaseResult` batch**
+  *(generator specified and tested — zero-network Markdown rendering;
+  no real dossier produced yet, see above)*. Tests:
+  [`../tests/test_vcd.py`](../tests/test_vcd.py) — status-count
+  summary, `COMPLIANT`/`NON-COMPLIANT` verdict, traceability matrix,
+  per-case check detail, `ERROR`-case rendering, Markdown table-cell
+  escaping. Zero network, zero model load.
+
+---
+
 ## Development workflow
 
 Two integration tests hit the real (git-ignored) ANSSI corpus and are
