@@ -472,6 +472,7 @@ def test_target_injection_demo_maps_report_fields_onto_context(monkeypatch):
     answer = _fake_answer(text="PWNED-7Q2")
     fake_report = SimpleNamespace(
         question="Q ?",
+        fake_doc_id="attack:fake-guide-mfa",
         answer=answer,
         fake_doc_in_top_k=True,
         payload_found=True,
@@ -485,6 +486,7 @@ def test_target_injection_demo_maps_report_fields_onto_context(monkeypatch):
     assert ctx.text == "PWNED-7Q2"
     assert ctx.citations == answer.citations
     assert ctx.extra == {
+        "fake_doc_id": "attack:fake-guide-mfa",
         "fake_doc_in_top_k": True,
         "payload_found": True,
         "fake_doc_cited_as_source": True,
@@ -505,6 +507,7 @@ def test_target_injection_demo_forwards_params_as_kwargs(monkeypatch):
         seen.update(kwargs)
         return SimpleNamespace(
             question=kwargs.get("question", ""),
+            fake_doc_id=kwargs.get("fake_doc_id", "attack:fake-guide-mfa"),
             answer=_fake_answer(),
             fake_doc_in_top_k=False,
             payload_found=False,
@@ -525,6 +528,7 @@ def test_target_injection_demo_with_no_params_uses_defaults(monkeypatch):
         seen.update(kwargs)
         return SimpleNamespace(
             question=kwargs.get("question", ""),
+            fake_doc_id=kwargs.get("fake_doc_id", "attack:fake-guide-mfa"),
             answer=_fake_answer(),
             fake_doc_in_top_k=False,
             payload_found=False,

@@ -306,6 +306,7 @@ def _target_injection_demo(params: dict) -> CaseContext:
         text=answer.text,
         citations=answer.citations,
         extra={
+            "fake_doc_id": report.fake_doc_id,
             "fake_doc_in_top_k": report.fake_doc_in_top_k,
             "payload_found": report.payload_found,
             "fake_doc_cited_as_source": report.fake_doc_cited_as_source,
