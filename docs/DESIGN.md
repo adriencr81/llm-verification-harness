@@ -342,7 +342,7 @@ executable contract:
   target's output: `refusal_signal`, `no_forbidden_terms`,
   `has_citation`, `citations_consistent`, `fake_doc_in_top_k`,
   `payload_absent`, `payload_present`, `fake_doc_not_cited`,
-  `leak_absent`).
+  `leak_absent`, `faithful_to_context`).
 - **`expected` distinguishes a tracked vulnerability from a
   regression** — most cases expect `PASS` (a defense holds). Both
   `REQ-INJECT-01` cases document a known, tracked vulnerability: one
@@ -359,7 +359,11 @@ executable contract:
   failure) plus the run's `model`, `temperature`, `latency_ms`, tokens,
   answer text, and a UTC timestamp — the same instrumentation `Answer`
   already carried since Brique 3, propagated through so a `CaseResult`
-  is reproducible, VCD-citable evidence, not a bare boolean.
+  is reproducible, VCD-citable evidence, not a bare boolean. Since
+  Brique 6, a check itself can raise (`faithful_to_context` calls the
+  LLM-as-judge, see below) — `run_case` wraps check execution in the
+  same try/except pattern, so that failure boundary is symmetric with
+  the target's.
 - **Schema validated in depth at load time** — `load_case` refuses an
   unknown `target`, an unknown `checks[].type`, an invalid `expected`,
   a missing required top-level field, **and** missing required
@@ -373,8 +377,9 @@ executable contract:
   `REQ-RAG-01-citations-consistent`, and — catalogued for the first
   time as `REQ-INJECT-01` — `REQ-INJECT-01-payload-leak` and
   `REQ-INJECT-01-source-legitimation` (the two independent B4
-  injection failure modes, each its own falsifiable case). A fifth,
-  `REQ-LEAK-01-prompt-exfiltration`, joined in Brique 6 (see below).
+  injection failure modes, each its own falsifiable case). Two more
+  joined in Brique 6 (see below): `REQ-LEAK-01-prompt-exfiltration` and
+  `REQ-FAITH-01-answer-grounded`.
 - **Bidirectional traceability, checked by machine** — every
   `requirement` a committed case cites must have a matching heading in
   [`REQUIREMENTS.md`](REQUIREMENTS.md);
@@ -453,6 +458,69 @@ Requirements:
   [`../tests/test_demo_leak.py`](../tests/test_demo_leak.py) — canary
   detection logic, canary-vs-`SYSTEM_PROMPT` lock, fake doc contract,
   verdict logic. Zero network, zero model load.
+
+---
+
+## Faithfulness judge (Brique 6, LLM09)
+
+OWASP LLM09 — overreliance / hallucination. No attacker here: the risk
+is the model asserting something the retrieved context doesn't
+support, which no existing mechanical check catches — `REQ-RAG-01`'s
+`citations_consistent` verifies a `[n]` reference resolves to the
+right chunk *by index*, not that the chunk actually *says* what the
+claim asserts.
+
+[`../judge.py`](../judge.py) closes that gap with a second, independent
+LLM call: `judge_faithfulness(question, context_chunks, answer_text)`
+renders the context with `ask._format_context` — reused directly, not
+reformatted, so the judge evaluates exactly what the target model saw
+— and asks a judge model to return structured JSON
+(`{"faithful": bool, "unsupported_claims": [...], "reasoning": "..."}`).
+A response that fails to parse raises `judge.JudgeParseError` rather
+than silently defaulting to a verdict — a silent fallback here would
+corrupt the very signal this project exists to produce. Every field is
+strictly type-checked, not coerced: `bool("false") == True` in Python,
+so a naive `bool(parsed["faithful"])` would silently invert a judge
+that answers with the string `"false"` — the parser raises instead.
+Internal consistency is checked too (`faithful=true` with a non-empty
+`unsupported_claims` is refused as a contract violation, not accepted
+silently).
+
+**Documented limitation, not a bug**: `judge.JUDGE_MODEL` defaults to
+`ask.DEFAULT_MODEL` — the same model family as the RAG target, not a
+distinct stronger judge. Self-judging bias (a model marking its own
+homework leniently) is accepted for cost/consistency in this baseline;
+`judge_model` is a parameter (`params.judge_model` in a YAML case)
+precisely so a stronger, independent judge can be swapped in later
+without a code change.
+
+`bench_runner.py` gained a new check kind, `faithful_to_context`
+(target `ask`) — the first check that itself calls an LLM rather than
+evaluating an already-computed output. That turns "the check itself
+can fail for infra reasons" into a real case, so `run_case` now wraps
+check execution in the same try/except pattern it already used for
+target execution (see above). Because this check needs
+`retrieved_chunks` on `ctx.raw` — which only `ask`'s `Answer` carries —
+a new `_CHECK_COMPATIBLE_TARGETS` map refuses pairing it with
+`injection_demo`/`leak_demo` at schema-validation time, before any LLM
+call: without that guard, the check would silently fall back to an
+empty context and spend a real judge call producing a verdict over
+nothing.
+
+**No live reference run is documented yet** for `REQ-FAITH-01` either
+— same constraint as `REQ-LEAK-01`, no network/API access in the
+implementing session. `bench/cases/req-faith-01-answer-grounded.yaml`
+declares `expected: PASS` as a defense hypothesis.
+
+Requirements:
+
+- **`REQ-FAITH-01` — faithfulness judge catalogued** *(specified, not
+  characterized — judge logic and its bench_runner integration fully
+  tested, LLM behavior not yet observed, see above)*. Tests:
+  [`../tests/test_judge.py`](../tests/test_judge.py) — JSON parsing
+  (fence-tolerant, raises on malformed/missing-key response), verdict
+  assembly against a stubbed OpenRouter client (same convention as
+  `tests/test_ask.py`). Zero network, zero model load.
 
 ---
 

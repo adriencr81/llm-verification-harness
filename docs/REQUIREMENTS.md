@@ -617,6 +617,104 @@ la défense — et alors seulement mettre à jour ce statut en
   observerait une fuite ferait passer ce cas en `REGRESSION`, signal à
   investiguer avant de recatégoriser en `expected: FAIL` documenté.
 
+## Fidélité — LLM-as-judge (`REQ-FAITH-*`)
+
+### `REQ-FAITH-01` — Fidélité de la réponse au contexte (OWASP LLM09, LLM-as-judge)
+
+Introduit en Brique 6. Cible OWASP LLM09 (surréliance / hallucination) :
+contrairement à `REQ-INJECT-01`/`REQ-LEAK-01`, il n'y a pas
+d'attaquant ici — le risque est que le modèle affirme quelque chose que
+le contexte fourni ne supporte pas, sans qu'aucun check mécanique
+existant ne le détecte. `REQ-RAG-01` (`citations_consistent`) vérifie
+qu'une citation `[n]` pointe vers le bon chunk par index, mais un
+index correct n'implique pas que le chunk cité *dise* ce que
+l'affirmation prétend — c'est le trou que `REQ-FAITH-01` couvre.
+
+**Mécanisme** — `judge.judge_faithfulness(question, context_chunks,
+answer_text)` fait un second appel LLM indépendant, avec le contexte
+exact vu par le modèle cible (`ask._format_context`, réutilisé tel
+quel — pas reformaté — pour que le juge ne puisse pas diverger de ce
+qui a réellement été injecté). Le juge répond en JSON structuré
+(`{"faithful": bool, "unsupported_claims": [...], "reasoning": "..."}`)
+— jamais de valeur par défaut silencieuse, et jamais de coercion
+permissive non plus : `judge._parse_judge_json` type-checke chaque
+champ (`faithful` doit être un booléen JSON réel — `bool("false")`
+valant `True` en Python, un simple `bool(parsed["faithful"])` inverserait
+silencieusement un juge qui répondrait par la chaîne `"false"` plutôt
+que le littéral JSON) et vérifie la cohérence interne du verdict
+(`faithful=true` avec une liste `unsupported_claims` non vide est
+refusé). Toute violation du contrat — JSON invalide, clé manquante,
+type incorrect, incohérence interne — lève `judge.JudgeParseError`
+plutôt que de dégrader silencieusement vers une valeur par défaut, ce
+qui corromprait le signal de vérification sans que personne ne le
+remarque.
+
+**Le juge porte lui-même une surface OWASP LLM01** : il ingère
+`context_chunks` verbatim dans son propre prompt, sans autre garde que
+`judge.JUDGE_SYSTEM`. Aujourd'hui seul le target `ask` (corpus bénin)
+l'alimente, donc l'exposition réelle est nulle — mais si un futur
+brique câblait le juge sur un target attaquant (`injection_demo`,
+`leak_demo`), un payload pourrait tenter d'instruire le juge lui-même
+de répondre `faithful: true` quel que soit le contenu réel de la
+réponse. Non durci ici, documenté pour ne pas être redécouvert comme
+une surprise.
+
+**Choix documenté — modèle juge non séparé** : `judge.JUDGE_MODEL`
+vaut `ask.DEFAULT_MODEL` par défaut (le même modèle que la cible),
+pas un modèle plus fort dédié à l'évaluation. Le biais de complaisance
+d'un modèle qui note sa propre copie est un risque connu de la
+littérature LLM-as-judge ; ce choix est assumé pour la cohérence/coût
+de ce baseline, pas nié. `judge_model` reste un paramètre exposé
+(configurable par cas YAML via `params.judge_model`) pour permettre un
+juge indépendant plus tard sans changement de code — évaluer ce swap
+est hors périmètre de cette livraison.
+
+**Intégration bench_runner** — nouveau check `faithful_to_context`
+(cible `ask` uniquement — voir plus bas —, lit `ctx.raw.retrieved_chunks`
+et `ctx.question` — champ `CaseContext.question` ajouté en Brique 6
+précisément pour ce besoin). Contrairement à tous les checks
+précédents, celui-ci fait lui-même un appel LLM : `bench_runner.run_case`
+a été étendu pour encadrer l'exécution des checks dans un `try/except`
+symétrique à celui qui protégeait déjà l'appel au target, afin qu'une
+panne du juge (réseau, réponse non parseable) remonte comme un
+`CaseResult` `ERROR` plutôt que de faire planter tout le run.
+`judge_model` et `judge_temperature` sont exposés en `params` du check,
+tous deux propagés jusqu'au `FaithfulnessVerdict` (VCD-citable).
+
+**Garde-fou schéma check↔target** — `faithful_to_context` a besoin de
+`retrieved_chunks` sur `ctx.raw`, que seul le `Answer` du target `ask`
+porte directement (`injection_demo`/`leak_demo` exposent un rapport
+d'attaque, pas un `Answer`). Sans garde, un cas mal formé associant ce
+check à un autre target dégraderait silencieusement vers un contexte
+vide et produirait un verdict sémantique sur rien — en consommant un
+vrai appel LLM pour ça. `bench_runner._CHECK_COMPATIBLE_TARGETS`
+refuse cette combinaison à la validation de schéma, avant tout appel
+LLM, même discipline que les autres classes de cas malformés
+(`_TARGET_REQUIRED_INPUT`, `_CHECK_REQUIRED_PARAMS`).
+
+**Statut** — *specified, not characterized* (même limite que
+`REQ-LEAK-01` : la logique du juge et son intégration sont testées et
+verrouillées par machine, mais aucun run réel contre un LLM n'a été
+observé dans cette livraison — pas d'accès réseau/API dans la session
+d'implémentation). `bench/cases/req-faith-01-answer-grounded.yaml`
+déclare `expected: PASS` comme hypothèse de défense.
+
+- **Producteur** : `judge.judge_faithfulness`
+- **Consommateur** : `bench_runner._check_faithful_to_context`
+  (target `ask`), Brique 7 (VCD)
+- **Producteur (formalisation)** : `bench/cases/req-faith-01-answer-grounded.yaml`,
+  exécuté via `bench_runner.py` (check `faithful_to_context`)
+- **Tests (déterministes, zéro appel réseau réel)** : `tests/test_judge.py`
+  — parsing JSON tolérant aux fences, erreur explicite sur réponse non
+  parseable ou clé `faithful` manquante, assemblage du verdict via un
+  client OpenRouter bouché (même convention que
+  `tests/test_ask.py::test_answer_from_chunks_assembles_instrumented_answer`)
+- **Falsifiabilité** : `expected: PASS` aujourd'hui — un run réel qui
+  observerait `faithful=false` ferait passer ce cas en `REGRESSION`
+  (au sens mécanique, pas une vraie régression faute de baseline
+  antérieure — voir `REQ-LEAK-01`), signal à investiguer avant de
+  recatégoriser en `expected: FAIL` documenté.
+
 ## Banc de vérification (`REQ-BENCH-*`)
 
 ### `REQ-BENCH-01` — Format de cas de test formel + runner (YAML)
@@ -692,10 +790,11 @@ Brique 7 — ne pas anticiper ici la génération de dossier.
   (REQ-RAG-01, `expected: PASS`), `bench/cases/req-inject-01-payload-leak.yaml`
   (REQ-INJECT-01, `expected: PASS`),
   `bench/cases/req-inject-01-source-legitimation.yaml`
-  (REQ-INJECT-01, `expected: FAIL` — vulnérabilité suivie) et
+  (REQ-INJECT-01, `expected: FAIL` — vulnérabilité suivie),
   `bench/cases/req-leak-01-prompt-exfiltration.yaml` (REQ-LEAK-01,
   `expected: PASS` — hypothèse de défense, run réel pas encore observé,
-  voir REQ-LEAK-01)
+  voir REQ-LEAK-01) et `bench/cases/req-faith-01-answer-grounded.yaml`
+  (REQ-FAITH-01, `expected: PASS` — même limite, voir REQ-FAITH-01)
 - **Consommateur** : Brique 6 (nouveaux cas OWASP), Brique 7 (VCD généré
   à partir d'un batch de `CaseResult`)
 - **Tests (déterministes, zéro appel réseau/LLM)** : `tests/test_bench_runner.py`
@@ -704,17 +803,20 @@ Brique 7 — ne pas anticiper ici la génération de dossier.
   logique de chaque check sur un `CaseContext` bouché, câblage de la
   normalisation `TARGETS` (`ask.ask`/`demo_injection.run_demo` bouchés),
   câblage `run_case` (les cinq états de `status`, capture de la
-  provenance), traçabilité bidirectionnelle cas↔registre
+  provenance, et depuis Brique 6 la panne d'un check — pas seulement
+  d'un target), traçabilité bidirectionnelle cas↔registre
 - **Non couvert par CI** : l'exécution réelle des cas (`python
   bench_runner.py`) appelle un LLM réel et, pour `injection_demo` /
-  `leak_demo`, charge BGE-M3 — même posture que les tests
+  `leak_demo`, charge BGE-M3 ; le check `faithful_to_context` appelle un
+  second LLM (le juge) — même posture que les tests
   `@pytest.mark.integration` de B3/B4.
 
 ## Statut
 
-**Gelé — Brique 5, complété en Brique 6.** `REQ-LEAK-01` est le premier
-ajout post-gel (fuite d'information, OWASP LLM02) — un ajout, pas une
-réécriture des IDs gelés ci-dessous.
+**Gelé — Brique 5, complété en Brique 6.** `REQ-LEAK-01` (fuite,
+OWASP LLM02) et `REQ-FAITH-01` (fidélité, OWASP LLM09) sont les deux
+premiers ajouts post-gel — des ajouts, pas une réécriture des IDs
+gelés ci-dessous.
 
 Tous les `REQ-*` listés ici sont stables : IDs
 `REQ-CORPUS-*`, `REQ-CHUNK-*`, `REQ-EMBED-*`, `REQ-RETRIEVE-*`,
