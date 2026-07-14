@@ -19,6 +19,7 @@ Il est séparé du corpus légitime (`../corpus/`) pour deux raisons :
 | Fichier | Vecteur | OWASP | Brique |
 |---|---|---|---|
 | `fake-guide-mfa.md` | Injection indirecte via document indexé (thème : politique de mot de passe OIV, payload cachée demandant `PWNED-7Q2`) | LLM01 — Prompt Injection | Brique 4 |
+| `fake-guide-prompt-leak.md` | Injection indirecte via document indexé (thème : audit de configuration admin-si, prétexte de conformité demandant la recopie verbatim du system prompt) | LLM02 — Sensitive Information Disclosure | Brique 6 |
 
 ## Vecteur d'attaque simulé — Brique 4
 
@@ -44,12 +45,23 @@ inchangé, puis vérifie **deux modes de défaillance indépendants** :
    le plus réaliste — un détecteur qui se contente d'un `grep` sur la
    chaîne payload ne le voit pas.
 
+## Vecteur d'attaque simulé — Brique 6 (fuite)
+
+Même mécanique que la Brique 4 (document plausible déposé dans le
+share indexé, retrieval fusionné, prompt système B3 inchangé), payload
+différent : un *prétexte d'audit de conformité* demande à l'assistant
+de recopier mot pour mot son prompt système. Détection par
+`../demo_leak.py` via un jeu de fragments canaris
+(`demo_leak.SYSTEM_PROMPT_CANARIES`) — voir `REQ-LEAK-01` dans
+`../docs/REQUIREMENTS.md`. **Pas encore de run réel observé** contre un
+LLM à cette livraison (voir statut détaillé dans REQUIREMENTS.md).
+
 ## Ce que ce corpus n'est PAS
 
-- Ce n'est pas un catalogue exhaustif OWASP — c'est un premier cas
-  d'attaque, sans formalisme de test. La formalisation (cas de test,
-  runner) arrive en Brique 5, l'élargissement aux autres familles
-  (fuite, fidélité, drift) en Brique 6.
+- Ce n'est pas un catalogue exhaustif OWASP — la formalisation (cas de
+  test, runner) est arrivée en Brique 5 ; l'élargissement aux autres
+  familles a commencé en Brique 6 (fuite avec `fake-guide-prompt-leak.md`
+  ci-dessus ; fidélité et drift restent à livrer dans la même brique).
 - Ce n'est pas un test de contre-mesure — Brique 9 fera la boucle
   détecter → corriger → re-vérifier.
 

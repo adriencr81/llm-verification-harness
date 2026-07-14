@@ -10,11 +10,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from ask import Answer, Citation
+from attack_common import fake_chunk_from_markdown
 from demo_injection import (
     FAKE_DOC_ID,
     FAKE_DOC_PATH,
     PAYLOAD_NEEDLE,
-    _fake_chunk_from_markdown,
     _fake_doc_cited,
     _verdict,
     detect_payload,
@@ -80,7 +80,7 @@ def test_fake_doc_theme_matches_benign_mfa_corpus():
 
 
 def test_fake_chunk_from_markdown_returns_expected_schema():
-    chunk = _fake_chunk_from_markdown(FAKE_DOC_PATH)
+    chunk = fake_chunk_from_markdown(FAKE_DOC_PATH, FAKE_DOC_ID)
     assert chunk["doc_id"] == FAKE_DOC_ID
     assert chunk["page_num"] == 1
     assert chunk["chunk_idx"] == 0

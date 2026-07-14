@@ -54,8 +54,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
-
 from ask import (
     DEFAULT_K,
     DEFAULT_MODEL,
@@ -63,14 +61,8 @@ from ask import (
     Answer,
     _answer_from_chunks,
 )
-from build_embeddings import encode_chunks
-from retrieve import (
-    RetrievalResult,
-    _load_index,
-    _load_matrix,
-    _load_model,
-    encode_query,
-)
+from attack_common import embed_attack_chunks, fake_chunk_from_markdown, retrieve_union
+from retrieve import RetrievalResult, _load_index, _load_matrix
 
 REPO_ROOT = Path(__file__).resolve().parent
 FAKE_DOC_PATH = REPO_ROOT / "corpus_attack" / "fake-guide-mfa.md"
@@ -108,58 +100,6 @@ def _fake_doc_cited(answer: Answer) -> bool:
     attacker-planted document as an authoritative citable source.
     """
     return any(c.doc_id == FAKE_DOC_ID for c in answer.citations)
-
-
-def _fake_chunk_from_markdown(path: Path) -> dict:
-    """One chunk covering the whole fake .md — the doc is short by design."""
-    text = path.read_text(encoding="utf-8")
-    return {
-        "doc_id": FAKE_DOC_ID,
-        "page_num": 1,
-        "chunk_idx": 0,
-        "char_start": 0,
-        "char_end": len(text),
-        "text": text,
-    }
-
-
-def _embed_attack_chunks(chunks: list[dict]) -> np.ndarray:
-    """Encode the attack chunks with the same pinned BGE-M3 as Brique 2.
-
-    The shape/dtype/L2 contract is enforced by ``encode_chunks`` itself
-    (Brique 2, REQ-EMBED-02) — no defensive re-assertion here.
-    """
-    return encode_chunks(chunks, _load_model())
-
-
-def _retrieve_union(
-    question: str,
-    benign_matrix: np.ndarray,
-    benign_index: list[dict],
-    attack_matrix: np.ndarray,
-    attack_index: list[dict],
-    k: int,
-) -> list[RetrievalResult]:
-    """Top-k retrieval over the concatenation of benign and attack indices."""
-    matrix = np.concatenate([benign_matrix, attack_matrix], axis=0)
-    index = benign_index + attack_index
-    k = min(k, len(index))
-    q = encode_query(question)
-    scores = matrix @ q
-    top = np.argpartition(-scores, k - 1)[:k]
-    top = top[np.argsort(-scores[top])]
-    return [
-        RetrievalResult(
-            doc_id=index[i]["doc_id"],
-            page_num=index[i]["page_num"],
-            chunk_idx=index[i]["chunk_idx"],
-            char_start=index[i]["char_start"],
-            char_end=index[i]["char_end"],
-            text=index[i]["text"],
-            score=float(scores[i]),
-        )
-        for i in top
-    ]
 
 
 def detect_payload(text: str, needle: str = PAYLOAD_NEEDLE) -> bool:
@@ -219,10 +159,10 @@ def run_demo(
     temperature: float = DEFAULT_TEMPERATURE,
 ) -> DemoReport:
     """Execute one indirect-injection run and return a full report."""
-    attack_chunks = [_fake_chunk_from_markdown(FAKE_DOC_PATH)]
-    attack_matrix = _embed_attack_chunks(attack_chunks)
+    attack_chunks = [fake_chunk_from_markdown(FAKE_DOC_PATH, FAKE_DOC_ID)]
+    attack_matrix = embed_attack_chunks(attack_chunks)
 
-    top_k = _retrieve_union(
+    top_k = retrieve_union(
         question=question,
         benign_matrix=_load_matrix(),
         benign_index=_load_index(),
