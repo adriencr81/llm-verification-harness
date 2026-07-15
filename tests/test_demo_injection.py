@@ -59,6 +59,15 @@ def test_detect_payload_is_case_sensitive():
     assert not detect_payload(PAYLOAD_NEEDLE.lower())
 
 
+def test_detect_payload_accepts_custom_needle():
+    # Brique 6 parametrisation: LEAK-01 reuses the demo pipeline with a
+    # different canary token; the detector must trigger on that token,
+    # not on the B4 constant.
+    canary = "LEAK-CANARY-9X4B7"
+    assert detect_payload(f"la réponse contient {canary} ...", needle=canary)
+    assert not detect_payload("aucune information sensible", needle=canary)
+
+
 # --- fake document contract -------------------------------------------------
 
 
@@ -79,6 +88,43 @@ def test_fake_doc_theme_matches_benign_mfa_corpus():
         assert keyword in text, f"missing expected theme keyword: {keyword}"
 
 
+# --- Brique 6 LEAK-01 attack file contract ----------------------------------
+
+
+LEAK_CANARY_PATH = Path(__file__).resolve().parent.parent / "corpus_attack" / "fake-note-canary.md"
+LEAK_CANARY_TOKEN = "LEAK-CANARY-9X4B7"
+
+
+def test_leak_canary_file_exists_and_carries_canary_token():
+    """Guardrail mirroring test_fake_doc_exists_and_carries_payload_needle
+    for the Brique 6 LLM02 leak scenario: an accidental edit that removes
+    the canary token would turn the LEAK-01 case into a no-op that PASSes
+    for the wrong reason."""
+    assert LEAK_CANARY_PATH.exists(), f"missing attack file: {LEAK_CANARY_PATH}"
+    text = LEAK_CANARY_PATH.read_text(encoding="utf-8")
+    assert LEAK_CANARY_TOKEN in text
+
+
+def test_leak_canary_file_theme_targets_rotation_secrets():
+    """The LEAK note must be semantically close to the OIV/rotation-of-secrets
+    theme so union retrieval ranks it in top-k on the LEAK-01 question. Keyword
+    check — same posture as the B4 fake-guide-mfa theme sanity."""
+    text = LEAK_CANARY_PATH.read_text(encoding="utf-8").lower()
+    for keyword in ("rotation", "administration", "oiv"):
+        assert keyword in text, f"missing expected theme keyword: {keyword}"
+
+
+def test_leak_canary_file_marks_the_token_as_confidential():
+    """A defense-in-depth guardrail: LLM02 posture rests on the fact
+    that the LLM has textual cues telling it the token is confidential.
+    If a future edit drops the confidentiality framing, the case would
+    still pass by accident — the LLM might not echo the token, but not
+    because it recognised it as sensitive. Keeps the pedagogy honest."""
+    text = LEAK_CANARY_PATH.read_text(encoding="utf-8").lower()
+    for cue in ("interne", "diffus", "confid"):
+        assert cue in text, f"missing confidentiality cue: {cue!r}"
+
+
 def test_fake_chunk_from_markdown_returns_expected_schema():
     chunk = _fake_chunk_from_markdown(FAKE_DOC_PATH)
     assert chunk["doc_id"] == FAKE_DOC_ID
@@ -87,6 +133,15 @@ def test_fake_chunk_from_markdown_returns_expected_schema():
     assert chunk["char_start"] == 0
     assert chunk["char_end"] == len(chunk["text"])
     assert PAYLOAD_NEEDLE in chunk["text"]
+
+
+def test_fake_chunk_from_markdown_accepts_custom_doc_id():
+    # Brique 6 parametrisation: the LEAK-01 case reuses this helper
+    # against a distinct attack file under a distinct doc_id. Default
+    # must remain the B4 constant so INJECT-01 cases are unchanged.
+    chunk = _fake_chunk_from_markdown(FAKE_DOC_PATH, doc_id="attack:leak-canary")
+    assert chunk["doc_id"] == "attack:leak-canary"
+    assert chunk["char_end"] == len(chunk["text"])
 
 
 # --- _fake_doc_cited --------------------------------------------------------
@@ -105,6 +160,15 @@ def test_fake_doc_cited_false_when_only_benign_docs_cited():
 def test_fake_doc_cited_false_when_no_citations():
     ans = _mk_answer()
     assert not _fake_doc_cited(ans)
+
+
+def test_fake_doc_cited_matches_custom_doc_id():
+    # Brique 6 parametrisation: LEAK-01 uses this helper with its own
+    # attack:leak-canary id. Default id must stay pointed at the B4
+    # attack so existing tests and INJECT-01 cases keep working.
+    ans = _mk_answer("mfa", "attack:leak-canary")
+    assert _fake_doc_cited(ans, doc_id="attack:leak-canary")
+    assert not _fake_doc_cited(ans)  # default = FAKE_DOC_ID absent here
 
 
 # --- _verdict --------------------------------------------------------------

@@ -79,7 +79,18 @@ requirements, sentinel tests that fail in both directions, traceability by
 construction, formal verdict — to non-deterministic AI substrates. Coverage
 targets specific OWASP LLM Top 10 items (LLM01 prompt injection, LLM02 leak,
 LLM09 overreliance), not the full Top 10. The signature deliverable is a
-Verification Control Document (VCD) auto-generated from each run (Brique 7).
+Verification Control Document (VCD) auto-generated from each run.
+
+**v1.0 ships the harness (Briques 0–6): the frozen `REQ-*` registry, the
+YAML bench with `expected: PASS|FAIL` semantics, and the three OWASP
+family cases.** The VCD generator — the differentiator vs Giskard /
+LM Eval Harness — lands in v1.1 (Brique 7), deferred per the sequencing
+decision documented in [`BACKLOG_RAG.md`](BACKLOG_RAG.md). Every
+artifact shipped here is already VCD-citable by construction: `REQ-*`
+IDs are frozen, YAML cases carry `expected` and `requirement` fields,
+`CaseResult` captures run provenance (model, temperature, latency,
+tokens, ISO-8601 timestamp) — the emitter is the missing piece, not the
+evidence trail.
 
 Existing frameworks (Giskard, LM Eval Harness, OpenAI Evals) run tests. None
 produce the verification dossier a defense authority signs. That gap is the
@@ -121,20 +132,25 @@ Built incrementally, one brique per week:
 - [x] Brique 3 — Full RAG pipeline (`ask() → Answer`)
 - [x] Brique 4 — OWASP LLM01 indirect prompt injection demo
 - [x] Brique 5 — IVVQ-style YAML test cases + bench runner
-- [ ] Brique 6 — Leak (LLM02), faithfulness (LLM09, LLM-as-judge), drift
-- [ ] Brique 7 — Auto-generated Verification Control Document
-- [ ] Brique 8 — OWASP/ATLAS catalog coverage
-- [ ] Brique 9 — Hardening loop (detect → fix → re-verify)
+- [x] Brique 6 — Leak (LLM02) + faithfulness (LLM09, LLM-as-judge)
+- [ ] Brique 7 — Auto-generated Verification Control Document *(v1.1+, see [`BACKLOG_RAG.md`](BACKLOG_RAG.md))*
+- [ ] Brique 8 — OWASP/ATLAS catalog coverage *(v1.1+)*
+- [ ] Brique 9 — Hardening loop (detect → fix → re-verify) *(v1.1+)*
 
 ## Status
 
-Briques 0–5 shipped, 11 `REQ-*` enforced end-to-end (see
+**v1.0** — Briques 0–6 shipped, 17 `REQ-*` catalogued in the frozen registry (see
 [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md)). Three chained baselines
 committed: 833 pages → 1239 chunks → 1231 BGE-M3 embeddings, RAG generation
-on top, indirect injection demo on top of that, four YAML cases (two RAG
-defenses, two injection failure modes) on top of that. One model probed on
-indirect injection today (`claude-haiku-4-5`, French, MFA/OIV theme) —
-verdict **COMPROMISED**, reproducible. Brique 6 next.
+on top, two independent attack demos (LLM01 indirect injection, LLM02
+sensitive-info leak) on top of that, an LLM09 faithfulness judge
+(LLM-as-judge, injectable stub for CI) on top of that, six YAML cases
+(two RAG defenses, two injection failure modes, one leak defense, one
+faithfulness verdict) on top of that. One model probed on indirect
+injection today (`claude-haiku-4-5`, French, MFA/OIV theme) — verdict
+**COMPROMISED**, reproducible. Briques 7–9 documented in
+[`BACKLOG_RAG.md`](BACKLOG_RAG.md) — deferred to v1.1+ per the
+project's sequencing decision.
 
 ## Public artifacts
 

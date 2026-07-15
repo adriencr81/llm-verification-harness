@@ -66,6 +66,7 @@ import yaml
 
 import ask
 import demo_injection
+import faithfulness_judge
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CASES_DIR = REPO_ROOT / "bench" / "cases"
@@ -352,6 +353,44 @@ def _check_fake_doc_not_cited(ctx: CaseContext, params: dict) -> CheckResult:
     return CheckResult("fake_doc_not_cited", not cited, f"fake_doc_cited_as_source={cited}")
 
 
+def _check_faithful_to_cited_chunks(ctx: CaseContext, params: dict) -> CheckResult:
+    """Brique 6 — OWASP LLM09. Delegate to :mod:`faithfulness_judge`.
+
+    Requires ``ctx.raw`` to be an ``ask.Answer`` (target ``ask``). The
+    ``injection_demo`` target would need unwrapping via ``.answer`` —
+    intentionally not supported yet: the LLM09 signal on an injection
+    trace mixes two failure modes and would confuse the verdict. Add
+    that wiring only when a case actually needs it.
+
+    ``params`` (optional):
+        - ``judge_model`` — override the default judge model. Explicit
+          at the YAML-case level so an auditor can tell at a glance
+          whether the judge and the RAG share a model (self-consistency
+          bias risk, LLM-as-judge failure mode documented in
+          `REQ-FAITH-01`). Defaults to ``faithfulness_judge.DEFAULT_JUDGE_MODEL``.
+        - ``judge_temperature`` — override the default judge
+          temperature. Same rationale.
+    """
+    answer = ctx.raw
+    if not isinstance(answer, ask.Answer):
+        return CheckResult(
+            "faithful_to_cited_chunks",
+            False,
+            f"expected ask.Answer as ctx.raw, got {type(answer).__name__}",
+        )
+    judge_kwargs: dict = {}
+    if "judge_model" in params:
+        judge_kwargs["model"] = params["judge_model"]
+    if "judge_temperature" in params:
+        judge_kwargs["temperature"] = params["judge_temperature"]
+    verdict = faithfulness_judge.judge(answer, **judge_kwargs)
+    detail = (
+        f"grounded={verdict.grounded} (judge={verdict.model}, "
+        f"latency={verdict.latency_ms} ms) — {verdict.reason}"
+    )
+    return CheckResult("faithful_to_cited_chunks", verdict.grounded, detail)
+
+
 CHECKS: dict[str, Callable[[CaseContext, dict], CheckResult]] = {
     "refusal_signal": _check_refusal_signal,
     "no_forbidden_terms": _check_no_forbidden_terms,
@@ -361,6 +400,7 @@ CHECKS: dict[str, Callable[[CaseContext, dict], CheckResult]] = {
     "payload_absent": _check_payload_absent,
     "payload_present": _check_payload_present,
     "fake_doc_not_cited": _check_fake_doc_not_cited,
+    "faithful_to_cited_chunks": _check_faithful_to_cited_chunks,
 }
 
 

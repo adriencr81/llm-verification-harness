@@ -326,6 +326,129 @@ def test_check_fake_doc_not_cited():
     assert not bench_runner._check_fake_doc_not_cited(cited, {}).passed
 
 
+# --- Brique 6 — faithful_to_cited_chunks (LLM09) delegates to the judge --
+
+
+def _mk_answer_for_judge() -> Answer:
+    return Answer(
+        text="Réponse [1].",
+        citations=(Citation(citation_id=1, doc_id="mfa", page_num=1, chunk_idx=0),),
+        retrieved_chunks=(),
+        model="stub",
+        temperature=0.0,
+        latency_ms=0,
+        tokens_in=0,
+        tokens_out=0,
+    )
+
+
+def test_check_faithful_to_cited_chunks_passes_when_judge_returns_grounded(monkeypatch):
+    answer = _mk_answer_for_judge()
+
+    def _fake_judge(a, **kwargs):
+        assert a is answer
+        return bench_runner.faithfulness_judge.JudgeVerdict(
+            grounded=True,
+            reason="ok",
+            model="stub-judge",
+            temperature=0.0,
+            latency_ms=42,
+            raw_response='{"grounded": true, "reason": "ok"}',
+        )
+
+    monkeypatch.setattr(bench_runner.faithfulness_judge, "judge", _fake_judge)
+    ctx = _ctx(raw=answer)
+    result = bench_runner._check_faithful_to_cited_chunks(ctx, {})
+    assert result.passed
+    assert "grounded=True" in result.detail
+    assert "stub-judge" in result.detail
+
+
+def test_check_faithful_to_cited_chunks_fails_when_judge_returns_not_grounded(monkeypatch):
+    answer = _mk_answer_for_judge()
+
+    def _fake_judge(a, **kwargs):
+        return bench_runner.faithfulness_judge.JudgeVerdict(
+            grounded=False,
+            reason="'16 caractères' absent des extraits",
+            model="stub-judge",
+            temperature=0.0,
+            latency_ms=42,
+            raw_response="{}",
+        )
+
+    monkeypatch.setattr(bench_runner.faithfulness_judge, "judge", _fake_judge)
+    ctx = _ctx(raw=answer)
+    result = bench_runner._check_faithful_to_cited_chunks(ctx, {})
+    assert not result.passed
+    assert "grounded=False" in result.detail
+    assert "16 caractères" in result.detail
+
+
+def test_check_faithful_to_cited_chunks_fails_cleanly_when_ctx_raw_is_not_an_answer():
+    # Injection demo target puts a DemoReport in ctx.raw. Feeding LLM09
+    # a two-headed observable would silently judge the wrong text — the
+    # check refuses that input rather than reaching into .answer under
+    # the covers. Explicit boundary, not a KeyError mid-run.
+    ctx = _ctx(raw=object())
+    result = bench_runner._check_faithful_to_cited_chunks(ctx, {})
+    assert not result.passed
+    assert "ask.Answer" in result.detail
+
+
+def test_faithful_to_cited_chunks_registered_in_checks():
+    assert "faithful_to_cited_chunks" in bench_runner.CHECKS
+
+
+def test_check_faithful_to_cited_chunks_forwards_judge_model_and_temperature(monkeypatch):
+    """Senior-review fix: `judge_model` / `judge_temperature` at the
+    YAML case level must reach `faithfulness_judge.judge` verbatim, so
+    an auditor pinning them in the case sees the pin honoured — not a
+    silent fall-back to the module default."""
+    answer = _mk_answer_for_judge()
+    seen: dict = {}
+
+    def _fake_judge(a, **kwargs):
+        seen.update(kwargs)
+        return bench_runner.faithfulness_judge.JudgeVerdict(
+            grounded=True,
+            reason="ok",
+            model=kwargs.get("model", "unset"),
+            temperature=kwargs.get("temperature", -1.0),
+            latency_ms=0,
+            raw_response="",
+        )
+
+    monkeypatch.setattr(bench_runner.faithfulness_judge, "judge", _fake_judge)
+    ctx = _ctx(raw=answer)
+    result = bench_runner._check_faithful_to_cited_chunks(
+        ctx,
+        {"judge_model": "anthropic/claude-haiku-4-5", "judge_temperature": 0.0},
+    )
+    assert result.passed
+    assert seen == {"model": "anthropic/claude-haiku-4-5", "temperature": 0.0}
+
+
+def test_check_faithful_to_cited_chunks_omits_kwargs_when_params_empty(monkeypatch):
+    """When the YAML case doesn't pin the judge, the check must call
+    `judge()` with no kwargs so the module default kicks in — never a
+    silent None override that would swallow the default."""
+    answer = _mk_answer_for_judge()
+    seen: dict = {}
+
+    def _fake_judge(a, **kwargs):
+        seen.update(kwargs)
+        return bench_runner.faithfulness_judge.JudgeVerdict(
+            grounded=True, reason="ok", model="default", temperature=0.0,
+            latency_ms=0, raw_response="",
+        )
+
+    monkeypatch.setattr(bench_runner.faithfulness_judge, "judge", _fake_judge)
+    ctx = _ctx(raw=answer)
+    bench_runner._check_faithful_to_cited_chunks(ctx, {})
+    assert seen == {}  # module default kicks in inside judge()
+
+
 # --- Targets: CaseContext normalisation -------------------------------
 
 
