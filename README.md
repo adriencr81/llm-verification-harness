@@ -121,7 +121,11 @@ Built incrementally, one brique per week:
 - [x] Brique 3 — Full RAG pipeline (`ask() → Answer`)
 - [x] Brique 4 — OWASP LLM01 indirect prompt injection demo
 - [x] Brique 5 — IVVQ-style YAML test cases + bench runner
-- [ ] Brique 6 — Leak (LLM02), faithfulness (LLM09, LLM-as-judge), drift
+- [~] Brique 6 — Leak (LLM02), faithfulness (LLM09, LLM-as-judge), drift —
+      harness + spec shipped (`REQ-LEAK-01`, `REQ-FAITH-01`, `REQ-DRIFT-01`),
+      **not yet checked off**: no live LLM run has characterized any of
+      the five new cases (no network/API access in the authoring
+      sessions) — see [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md#statut)
 - [ ] Brique 7 — Auto-generated Verification Control Document
 - [ ] Brique 8 — OWASP/ATLAS catalog coverage
 - [ ] Brique 9 — Hardening loop (detect → fix → re-verify)
@@ -134,7 +138,18 @@ committed: 833 pages → 1239 chunks → 1231 BGE-M3 embeddings, RAG generation
 on top, indirect injection demo on top of that, four YAML cases (two RAG
 defenses, two injection failure modes) on top of that. One model probed on
 indirect injection today (`claude-haiku-4-5`, French, MFA/OIV theme) —
-verdict **COMPROMISED**, reproducible. Brique 6 next.
+verdict **COMPROMISED**, reproducible.
+
+Brique 6 — harness and spec shipped: a system-prompt exfiltration demo
+(`REQ-LEAK-01`, OWASP LLM02), an LLM-as-judge faithfulness check
+(`REQ-FAITH-01`, OWASP LLM09), and three payload-encoding variants of
+the Brique 4 injection attack (`REQ-DRIFT-01`, English / base64 /
+fake-confirmation-transcript) — 9 bench cases total, 136 deterministic
+tests green. **Deliberately not marked done**: none of the five new
+cases has been run against a real LLM yet — the authoring sessions had
+no OpenRouter network access. Each is *specified, not characterized*
+until that first run happens; see the closure note in
+[`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md#statut).
 
 ## Public artifacts
 

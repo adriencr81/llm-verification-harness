@@ -153,6 +153,25 @@ def test_load_case_missing_required_target_input_raises(tmp_path: Path):
         load_case(path)
 
 
+def test_load_case_faithful_to_context_rejects_incompatible_target(tmp_path: Path):
+    # faithful_to_context needs retrieved_chunks on ctx.raw, which only
+    # the ``ask`` target's Answer carries — refused at load time rather
+    # than silently judging an empty context and burning a real LLM call.
+    data = _valid_case_dict(
+        target="injection_demo", input={}, checks=[{"type": "faithful_to_context"}]
+    )
+    path = _write_case(tmp_path, "case.yaml", data)
+    with pytest.raises(CaseSchemaError, match="only compatible with target"):
+        load_case(path)
+
+
+def test_load_case_faithful_to_context_accepts_ask_target(tmp_path: Path):
+    data = _valid_case_dict(target="ask", checks=[{"type": "faithful_to_context"}])
+    path = _write_case(tmp_path, "case.yaml", data)
+    case = load_case(path)
+    assert case.checks[0].type == "faithful_to_context"
+
+
 def test_load_case_injection_demo_target_has_no_required_input(tmp_path: Path):
     # injection_demo's question has a default in demo_injection.py — an
     # empty input dict must still load.
@@ -231,6 +250,7 @@ def _ctx(
     citations: tuple = (),
     extra: dict | None = None,
     raw=None,
+    question: str = "",
     model: str = "stub-model",
     temperature: float = 0.0,
     latency_ms: int = 0,
@@ -242,6 +262,7 @@ def _ctx(
         citations=citations,
         extra=extra or {},
         raw=raw,
+        question=question,
         model=model,
         temperature=temperature,
         latency_ms=latency_ms,
@@ -326,6 +347,76 @@ def test_check_fake_doc_not_cited():
     assert not bench_runner._check_fake_doc_not_cited(cited, {}).passed
 
 
+def test_check_leak_absent():
+    leaked = _ctx(extra={"leak_found": True, "leaked_canaries": ("frag",)})
+    clean = _ctx(extra={"leak_found": False})
+    assert bench_runner._check_leak_absent(clean, {}).passed
+    result = bench_runner._check_leak_absent(leaked, {})
+    assert not result.passed
+    assert "frag" in result.detail
+
+
+def test_check_faithful_to_context_calls_judge_with_question_and_chunks(monkeypatch):
+    seen = {}
+
+    def _fake_judge_faithfulness(question, context_chunks, answer_text, model, temperature):
+        seen["question"] = question
+        seen["context_chunks"] = context_chunks
+        seen["answer_text"] = answer_text
+        seen["model"] = model
+        seen["temperature"] = temperature
+        return SimpleNamespace(faithful=True, unsupported_claims=(), reasoning="ok")
+
+    monkeypatch.setattr(bench_runner.judge, "judge_faithfulness", _fake_judge_faithfulness)
+
+    chunk = _FakeChunk("mfa", 1, 0)
+    ctx = _ctx(
+        text="Réponse [1].",
+        question="Une question ?",
+        raw=_FakeAnswer((chunk,)),
+    )
+    result = bench_runner._check_faithful_to_context(ctx, {})
+
+    assert result.passed
+    assert seen["question"] == "Une question ?"
+    assert seen["context_chunks"] == [chunk]
+    assert seen["answer_text"] == "Réponse [1]."
+    assert seen["model"] == bench_runner.judge.JUDGE_MODEL
+    assert seen["temperature"] == bench_runner.judge.JUDGE_TEMPERATURE
+
+
+def test_check_faithful_to_context_uses_judge_model_and_temperature_params(monkeypatch):
+    seen = {}
+
+    def _fake_judge_faithfulness(question, context_chunks, answer_text, model, temperature):
+        seen["model"] = model
+        seen["temperature"] = temperature
+        return SimpleNamespace(faithful=True, unsupported_claims=(), reasoning="")
+
+    monkeypatch.setattr(bench_runner.judge, "judge_faithfulness", _fake_judge_faithfulness)
+    ctx = _ctx(raw=_FakeAnswer(()))
+    bench_runner._check_faithful_to_context(
+        ctx, {"judge_model": "custom-judge", "judge_temperature": 0.5}
+    )
+    assert seen["model"] == "custom-judge"
+    assert seen["temperature"] == 0.5
+
+
+def test_check_faithful_to_context_fails_and_details_unsupported_claims(monkeypatch):
+    monkeypatch.setattr(
+        bench_runner.judge,
+        "judge_faithfulness",
+        lambda question, context_chunks, answer_text, model, temperature: SimpleNamespace(
+            faithful=False, unsupported_claims=("claim X",), reasoning="pas dans le contexte"
+        ),
+    )
+    ctx = _ctx(raw=_FakeAnswer(()))
+    result = bench_runner._check_faithful_to_context(ctx, {})
+    assert not result.passed
+    assert "claim X" in result.detail
+    assert "pas dans le contexte" in result.detail
+
+
 # --- Targets: CaseContext normalisation -------------------------------
 
 
@@ -354,6 +445,7 @@ def test_target_ask_maps_answer_fields_onto_context(monkeypatch):
     assert ctx.citations == answer.citations
     assert ctx.extra == {}
     assert ctx.raw is answer
+    assert ctx.question == "Une question ?"
     assert ctx.model == answer.model
     assert ctx.temperature == answer.temperature
     assert ctx.latency_ms == answer.latency_ms
@@ -379,6 +471,8 @@ def test_target_ask_forwards_extra_params_and_strips_question(monkeypatch):
 def test_target_injection_demo_maps_report_fields_onto_context(monkeypatch):
     answer = _fake_answer(text="PWNED-7Q2")
     fake_report = SimpleNamespace(
+        question="Q ?",
+        fake_doc_id="attack:fake-guide-mfa",
         answer=answer,
         fake_doc_in_top_k=True,
         payload_found=True,
@@ -392,12 +486,14 @@ def test_target_injection_demo_maps_report_fields_onto_context(monkeypatch):
     assert ctx.text == "PWNED-7Q2"
     assert ctx.citations == answer.citations
     assert ctx.extra == {
+        "fake_doc_id": "attack:fake-guide-mfa",
         "fake_doc_in_top_k": True,
         "payload_found": True,
         "fake_doc_cited_as_source": True,
         "verdict": "VULNERABLE — ...",
     }
     assert ctx.raw is fake_report
+    assert ctx.question == "Q ?"
     assert ctx.model == answer.model
     assert ctx.latency_ms == answer.latency_ms
     assert ctx.tokens_in == answer.tokens_in
@@ -410,6 +506,8 @@ def test_target_injection_demo_forwards_params_as_kwargs(monkeypatch):
     def _fake_run_demo(**kwargs):
         seen.update(kwargs)
         return SimpleNamespace(
+            question=kwargs.get("question", ""),
+            fake_doc_id=kwargs.get("fake_doc_id", "attack:fake-guide-mfa"),
             answer=_fake_answer(),
             fake_doc_in_top_k=False,
             payload_found=False,
@@ -429,6 +527,8 @@ def test_target_injection_demo_with_no_params_uses_defaults(monkeypatch):
     def _fake_run_demo(**kwargs):
         seen.update(kwargs)
         return SimpleNamespace(
+            question=kwargs.get("question", ""),
+            fake_doc_id=kwargs.get("fake_doc_id", "attack:fake-guide-mfa"),
             answer=_fake_answer(),
             fake_doc_in_top_k=False,
             payload_found=False,
@@ -513,6 +613,41 @@ def test_run_case_target_raises_sets_error_and_fails(monkeypatch):
     assert result.check_results == ()
     assert "simulated network failure" in result.error
     assert result.timestamp  # captured even on error
+
+
+def test_run_case_check_raises_sets_error_and_preserves_ctx_provenance(monkeypatch):
+    """Since Brique 6, a check (``faithful_to_context``) can itself hit
+    the network via the judge. A check-time exception must surface as
+    an ``ERROR`` CaseResult — not crash ``run_cases`` — while still
+    carrying the already-succeeded target's provenance (the LLM call
+    that produced the answer did work; only the judge failed)."""
+    monkeypatch.setitem(
+        bench_runner.TARGETS,
+        "ask",
+        lambda params: _ctx(
+            text="Réponse.",
+            model="anthropic/claude-haiku-4-5",
+            latency_ms=100,
+            tokens_in=5,
+            tokens_out=3,
+        ),
+    )
+
+    def _boom_check(ctx, params):
+        raise RuntimeError("judge network failure")
+
+    monkeypatch.setitem(bench_runner.CHECKS, "has_citation", _boom_check)
+    case = _mk_case()
+    result = run_case(case)
+
+    assert result.status == "ERROR"
+    assert not result.passed
+    assert result.check_results == ()
+    assert "judge network failure" in result.error
+    assert result.text == "Réponse."
+    assert result.model == "anthropic/claude-haiku-4-5"
+    assert result.tokens_in == 5
+    assert result.timestamp
 
 
 def test_run_case_captures_run_provenance(monkeypatch):

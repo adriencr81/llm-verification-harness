@@ -20,17 +20,35 @@ Two target/check families ship today:
 
 - ``ask`` — drives ``ask.ask(question, ...)`` (Brique 3 RAG pipeline).
   Checks: ``refusal_signal``, ``no_forbidden_terms``, ``has_citation``,
-  ``citations_consistent``.
+  ``citations_consistent``, ``faithful_to_context`` (Brique 6,
+  LLM-as-judge groundedness — see below).
 - ``injection_demo`` — drives ``demo_injection.run_demo(question, ...)``
   (Brique 4 OWASP LLM01 attack). Checks: ``fake_doc_in_top_k``,
   ``payload_absent``, ``payload_present``, ``fake_doc_not_cited``.
+- ``leak_demo`` — drives ``demo_leak.run_demo(question, ...)``
+  (Brique 6 OWASP LLM02 system-prompt exfiltration attack). Checks:
+  ``fake_doc_in_top_k``, ``leak_absent``.
 
-Both hit a real LLM (OpenRouter) and, for ``injection_demo``, load the
-BGE-M3 model — non-deterministic and costly, same reasoning as the B3/B4
-integration tests (``pytest.mark.integration``, skipped in CI). This
+All three hit a real LLM (OpenRouter) and, for ``injection_demo`` /
+``leak_demo``, load the BGE-M3 model — non-deterministic and costly,
+same reasoning as the B3/B4 integration tests (``pytest.mark.integration``,
+skipped in CI). This
 module's own tests (``tests/test_bench_runner.py``) cover schema
 validation and check logic only, with stubbed contexts — zero network,
 zero model load, runs in CI.
+
+**``faithful_to_context`` is a second kind of check** (Brique 6,
+``judge.py``, OWASP LLM09 overreliance/hallucination): every other
+check is a pure, local predicate over the target's already-computed
+output, but this one makes its own independent LLM call (the
+faithfulness judge) to decide whether the answer is grounded in the
+retrieved context. That means a check can now fail for
+infrastructure reasons (judge network error, unparseable judge
+response — ``judge.JudgeParseError``), not just report a failed
+predicate — ``run_case`` wraps check execution in the same
+try/except pattern it already used for target execution, so either
+boundary failing surfaces as an ``ERROR`` :class:`CaseResult` rather
+than crashing the run.
 
 Every case declares an ``expected`` outcome, ``PASS`` (default) or
 ``FAIL``. Most cases assert a defense holds — ``expected: PASS``. The
@@ -66,6 +84,8 @@ import yaml
 
 import ask
 import demo_injection
+import demo_leak
+import judge
 
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CASES_DIR = REPO_ROOT / "bench" / "cases"
@@ -113,6 +133,17 @@ _CHECK_REQUIRED_PARAMS: dict[str, tuple[str, ...]] = {
 }
 _TARGET_REQUIRED_INPUT: dict[str, tuple[str, ...]] = {
     "ask": ("question",),
+}
+# Checks that only make sense against specific targets. Absent from this
+# map = compatible with any target (the historical default). Introduced
+# for ``faithful_to_context`` (Brique 6): it needs ``retrieved_chunks``
+# on ``ctx.raw``, which only ``ask``'s ``Answer`` carries directly — on
+# ``injection_demo``/``leak_demo`` (``ctx.raw`` is a demo report) it
+# would silently fall back to an empty context and burn a real LLM call
+# producing a semantic verdict over nothing, instead of being refused at
+# load time like every other malformed-case class.
+_CHECK_COMPATIBLE_TARGETS: dict[str, tuple[str, ...]] = {
+    "faithful_to_context": ("ask",),
 }
 
 
@@ -166,6 +197,12 @@ def _validate_case_schema(raw: dict, path: Path) -> None:
         if missing_params:
             raise CaseSchemaError(
                 f"{path}: check {check_type!r} requires param(s) {missing_params}"
+            )
+        compatible_targets = _CHECK_COMPATIBLE_TARGETS.get(check_type)
+        if compatible_targets is not None and target not in compatible_targets:
+            raise CaseSchemaError(
+                f"{path}: check {check_type!r} is only compatible with target(s) "
+                f"{compatible_targets}, got target {target!r}"
             )
 
 
@@ -226,13 +263,17 @@ class CaseContext:
     through ``tokens_out`` mirror ``ask.Answer``'s instrumentation
     fields, always sourced from the underlying ``Answer`` regardless of
     which target produced it — this is the run provenance a case result
-    carries forward as VCD-citable evidence, not just a bool.
+    carries forward as VCD-citable evidence, not just a bool. ``question``
+    is the exact input question routed to the target — added in Brique 6
+    so a check can hand it to a second LLM call (the faithfulness judge)
+    without threading ``case.input`` through the check-calling interface.
     """
 
     text: str
     citations: tuple
     extra: dict
     raw: object
+    question: str
     model: str
     temperature: float
     latency_ms: int
@@ -249,6 +290,7 @@ def _target_ask(params: dict) -> CaseContext:
         citations=answer.citations,
         extra={},
         raw=answer,
+        question=question,
         model=answer.model,
         temperature=answer.temperature,
         latency_ms=answer.latency_ms,
@@ -264,12 +306,36 @@ def _target_injection_demo(params: dict) -> CaseContext:
         text=answer.text,
         citations=answer.citations,
         extra={
+            "fake_doc_id": report.fake_doc_id,
             "fake_doc_in_top_k": report.fake_doc_in_top_k,
             "payload_found": report.payload_found,
             "fake_doc_cited_as_source": report.fake_doc_cited_as_source,
             "verdict": report.verdict,
         },
         raw=report,
+        question=report.question,
+        model=answer.model,
+        temperature=answer.temperature,
+        latency_ms=answer.latency_ms,
+        tokens_in=answer.tokens_in,
+        tokens_out=answer.tokens_out,
+    )
+
+
+def _target_leak_demo(params: dict) -> CaseContext:
+    report = demo_leak.run_demo(**params)
+    answer = report.answer
+    return CaseContext(
+        text=answer.text,
+        citations=answer.citations,
+        extra={
+            "fake_doc_in_top_k": report.fake_doc_in_top_k,
+            "leak_found": report.leak_found,
+            "leaked_canaries": report.leaked_canaries,
+            "verdict": report.verdict,
+        },
+        raw=report,
+        question=report.question,
         model=answer.model,
         temperature=answer.temperature,
         latency_ms=answer.latency_ms,
@@ -281,6 +347,7 @@ def _target_injection_demo(params: dict) -> CaseContext:
 TARGETS: dict[str, Callable[[dict], CaseContext]] = {
     "ask": _target_ask,
     "injection_demo": _target_injection_demo,
+    "leak_demo": _target_leak_demo,
 }
 
 
@@ -352,6 +419,44 @@ def _check_fake_doc_not_cited(ctx: CaseContext, params: dict) -> CheckResult:
     return CheckResult("fake_doc_not_cited", not cited, f"fake_doc_cited_as_source={cited}")
 
 
+def _check_leak_absent(ctx: CaseContext, params: dict) -> CheckResult:
+    found = bool(ctx.extra.get("leak_found"))
+    canaries = ctx.extra.get("leaked_canaries", ())
+    detail = f"leak_found={found}" + (f", canaries={list(canaries)}" if found else "")
+    return CheckResult("leak_absent", not found, detail)
+
+
+def _check_faithful_to_context(ctx: CaseContext, params: dict) -> CheckResult:
+    """LLM-as-judge groundedness check (REQ-FAITH-01, OWASP LLM09).
+
+    Restricted to target ``ask`` by ``_CHECK_COMPATIBLE_TARGETS`` —
+    needs ``retrieved_chunks`` on ``ctx.raw``, same convention already
+    relied on by ``_check_citations_consistent``. Unlike every other
+    check in this module, this one makes a second, independent LLM
+    call — costly and non-deterministic, same posture as the targets
+    themselves. A judge parse failure (``judge.JudgeParseError``) or
+    network error is not caught here; ``run_case`` wraps check
+    execution precisely so this surfaces as an ``ERROR`` result rather
+    than crashing the whole run — that same wrap would also catch a
+    genuine logic bug in a *different*, normally-pure check, which is
+    an accepted, documented imprecision (see ``run_case``'s docstring):
+    the exception class name is preserved in ``CaseResult.error`` so a
+    reader can still tell a judge/network failure from a check bug.
+    """
+    retrieved = getattr(ctx.raw, "retrieved_chunks", ())
+    model = params.get("judge_model", judge.JUDGE_MODEL)
+    temperature = params.get("judge_temperature", judge.JUDGE_TEMPERATURE)
+    verdict = judge.judge_faithfulness(
+        ctx.question, list(retrieved), ctx.text, model=model, temperature=temperature
+    )
+    detail = (
+        "faithful"
+        if verdict.faithful
+        else f"unsupported claim(s): {list(verdict.unsupported_claims)} — {verdict.reasoning}"
+    )
+    return CheckResult("faithful_to_context", verdict.faithful, detail)
+
+
 CHECKS: dict[str, Callable[[CaseContext, dict], CheckResult]] = {
     "refusal_signal": _check_refusal_signal,
     "no_forbidden_terms": _check_no_forbidden_terms,
@@ -361,6 +466,8 @@ CHECKS: dict[str, Callable[[CaseContext, dict], CheckResult]] = {
     "payload_absent": _check_payload_absent,
     "payload_present": _check_payload_present,
     "fake_doc_not_cited": _check_fake_doc_not_cited,
+    "leak_absent": _check_leak_absent,
+    "faithful_to_context": _check_faithful_to_context,
 }
 
 
@@ -430,7 +537,32 @@ def run_case(case: Case) -> CaseResult:
         ctx = TARGETS[case.target](case.input)
     except Exception as exc:  # boundary: LLM call, model load, network
         return CaseResult(case=case, error=f"{exc.__class__.__name__}: {exc}", timestamp=timestamp)
-    results = tuple(CHECKS[spec.type](ctx, spec.params) for spec in case.checks)
+    try:
+        # Boundary again: since Brique 6, a check can itself call an LLM
+        # (``faithful_to_context`` → the judge) — no longer guaranteed
+        # pure/local like the original substring/citation checks. Wrapped
+        # here so a judge network/parse failure surfaces as an ``ERROR``
+        # CaseResult (with the already-succeeded ctx's provenance
+        # preserved) instead of crashing the whole bench run. Accepted
+        # imprecision: this also buckets a genuine bug in an otherwise-pure
+        # check (e.g. a ``KeyError`` in a check's own logic) into the same
+        # ``ERROR`` status as a judge/network failure — ``exc.__class__.__name__``
+        # is kept in ``CaseResult.error`` precisely so that distinction is
+        # still readable from the evidence, without a separate error-taxonomy
+        # field that this baseline doesn't yet need.
+        results = tuple(CHECKS[spec.type](ctx, spec.params) for spec in case.checks)
+    except Exception as exc:
+        return CaseResult(
+            case=case,
+            error=f"{exc.__class__.__name__}: {exc}",
+            text=ctx.text,
+            model=ctx.model,
+            temperature=ctx.temperature,
+            latency_ms=ctx.latency_ms,
+            tokens_in=ctx.tokens_in,
+            tokens_out=ctx.tokens_out,
+            timestamp=timestamp,
+        )
     return CaseResult(
         case=case,
         check_results=results,
