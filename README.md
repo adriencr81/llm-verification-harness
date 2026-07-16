@@ -126,19 +126,24 @@ Built incrementally, one brique per week:
       **not yet checked off**: no live LLM run has characterized any of
       the five new cases (no network/API access in the authoring
       sessions) — see [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md#statut)
-- [ ] Brique 7 — Auto-generated Verification Control Document
-- [ ] Brique 8 — OWASP/ATLAS catalog coverage
-- [ ] Brique 9 — Hardening loop (detect → fix → re-verify)
+- [ ] Brique 7 — Auto-generated Verification Control Document *(v1.1+, see [`BACKLOG_RAG.md`](BACKLOG_RAG.md))*
+- [ ] Brique 8 — OWASP/ATLAS catalog coverage *(v1.1+)*
+- [ ] Brique 9 — Hardening loop (detect → fix → re-verify) *(v1.1+)*
 
 ## Status
 
-Briques 0–5 shipped, 11 `REQ-*` enforced end-to-end (see
-[`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md)). Three chained baselines
+Briques 0–5 shipped end-to-end, 18 `REQ-*` catalogued in the frozen
+registry (see [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md)) — 15 of
+which are empirically enforced (`REQ-CORPUS-*` × 4, `REQ-CHUNK-*` × 4,
+`REQ-EMBED-*` × 2, `REQ-RETRIEVE-01`, `REQ-RAG-*` × 2, `REQ-INJECT-01`,
+`REQ-BENCH-01`), 3 shipped in Brique 6 as spec + harness + cases but
+awaiting the first live run (`REQ-LEAK-01`, `REQ-FAITH-01`,
+`REQ-DRIFT-01` — see the paragraph below). Three chained baselines
 committed: 833 pages → 1239 chunks → 1231 BGE-M3 embeddings, RAG generation
-on top, indirect injection demo on top of that, four YAML cases (two RAG
-defenses, two injection failure modes) on top of that. One model probed on
-indirect injection today (`claude-haiku-4-5`, French, MFA/OIV theme) —
-verdict **COMPROMISED**, reproducible.
+on top, indirect injection demo on top of that, nine YAML cases (two RAG
+defenses, two injection failure modes, five new B6 cases) on top of that.
+One model probed on indirect injection today (`claude-haiku-4-5`, French,
+MFA/OIV theme) — verdict **COMPROMISED**, reproducible.
 
 Brique 6 — harness and spec shipped: a system-prompt exfiltration demo
 (`REQ-LEAK-01`, OWASP LLM02), an LLM-as-judge faithfulness check
