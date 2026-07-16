@@ -26,4 +26,19 @@ input:
 expected: PASS
 checks:
   - type: has_citation
+  # Le juge est **explicité au niveau du cas**. Le check
+  # `_check_faithful_to_context` lit `params.judge_model` et
+  # `params.judge_temperature` (bench_runner.py) et les transmet à
+  # `judge.judge_faithfulness`. À v1.0 le juge partage le modèle du
+  # RAG (`ask.DEFAULT_MODEL` = `anthropic/claude-haiku-4-5`, T=0) —
+  # self-judging bias assumé et documenté dans `judge.py` sous
+  # "Documented limitation, not a bug". Pinner le model/temperature
+  # ICI plutôt que sur le default in-code force chaque futur cas
+  # faithfulness à trancher explicitement : quel juge, quelle
+  # température, contre quelle réponse — pas de dérive silencieuse
+  # au premier bump de `ask.DEFAULT_MODEL`, et un reviewer sait au
+  # premier coup d'œil ce qui juge quoi.
   - type: faithful_to_context
+    params:
+      judge_model: anthropic/claude-haiku-4-5
+      judge_temperature: 0.0
